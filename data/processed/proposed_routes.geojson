@@ -1,0 +1,10 @@
+{
+"type": "FeatureCollection",
+"name": "proposed_routes",
+"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:OGC:1.3:CRS84" } },
+"features": [
+{ "type": "Feature", "properties": { "route_id": 1, "name": "Night Owl Route 1 — South Side Medical Corridor", "estimated_daily_riders": 775, "block_groups_served": 17, "anchors": "Rush University Medical Center, Stroger Hospital (Cook County), University of Chicago Medicine" }, "geometry": { "type": "LineString", "coordinates": [ [ -87.6752, 41.8716 ], [ -87.6713, 41.8738 ], [ -87.652998318151873, 41.768712138505229 ], [ -87.651795224817832, 41.745971958200251 ], [ -87.650107569746567, 41.774212445698069 ], [ -87.632349127593073, 41.882672127806309 ], [ -87.606654828691063, 41.669304667973549 ], [ -87.5986, 41.789 ] ] } },
+{ "type": "Feature", "properties": { "route_id": 2, "name": "Night Owl Route 2 — Airport / Logistics Express", "estimated_daily_riders": 334, "block_groups_served": 8, "anchors": "O'Hare International Airport, Midway Airport, UPS Chicago Area Consolidation, Amazon MDW6 (Markham)" }, "geometry": { "type": "LineString", "coordinates": [ [ -87.9073, 41.9742 ], [ -87.82, 41.72 ], [ -87.759725847493769, 41.873838821298236 ], [ -87.7524, 41.7868 ], [ -87.6939, 41.6003 ], [ -87.639870351434453, 41.709689645303662 ], [ -87.636234592258916, 41.755972287862697 ], [ -87.590752819901923, 41.75963117931196 ], [ -87.578746540346771, 41.713716185020147 ] ] } },
+{ "type": "Feature", "properties": { "route_id": 3, "name": "Night Owl Route 3 — West Side Hospital Link", "estimated_daily_riders": 283, "block_groups_served": 7, "anchors": "Northwestern Memorial Hospital, Rush University Medical Center, Stroger Hospital (Cook County)" }, "geometry": { "type": "LineString", "coordinates": [ [ -87.767333780422021, 41.890697301854317 ], [ -87.6752, 41.8716 ], [ -87.6713, 41.8738 ], [ -87.657451919629324, 41.729592181809792 ], [ -87.630443997425076, 41.698421495658877 ], [ -87.6215, 41.8958 ], [ -87.617361666811505, 41.877706553902492 ], [ -87.602824807632317, 41.834739168709703 ] ] } }
+]
+}

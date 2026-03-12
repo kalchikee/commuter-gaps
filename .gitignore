@@ -1,0 +1,27 @@
+# Data (large files tracked via Git LFS or excluded)
+data/raw/gtfs/*.zip
+data/raw/lodes/*.csv.gz
+data/raw/hifld/*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs (regeneratable)
+outputs/figures/*.png
+outputs/figures/*.pdf
+
+# Secrets
+*.env
+config.ini
