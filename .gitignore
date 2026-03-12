@@ -1,7 +1,5 @@
-# Data (large files tracked via Git LFS or excluded)
-data/raw/gtfs/*.zip
-data/raw/lodes/*.csv.gz
-data/raw/hifld/*.zip
+# Raw data — all excluded (downloaded by 01_download_data.py)
+data/raw/
 
 # Python
 __pycache__/
