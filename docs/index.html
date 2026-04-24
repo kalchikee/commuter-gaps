@@ -491,7 +491,8 @@ function renderLegend() {
 
   const sections = [];
 
-  // Base layer section — whichever fill layer is currently visible
+  // Each base layer renders its own section independently so multiple can
+  // be shown in the legend when the user has multiple toggles on.
   if (isLayerVisible("transit-fill")) {
     sections.push(legendSection("Overnight Transit Coverage",
       legendRow(swatch("#1a9850"), "Moderate (8+ stops ≤400m)") +
@@ -499,7 +500,8 @@ function renderLegend() {
       legendRow(swatch("#fc8d59"), "Very limited (1–2 stops)") +
       legendRow(swatch("#d73027"), "No overnight service")
     ));
-  } else if (isLayerVisible("stranded-fill")) {
+  }
+  if (isLayerVisible("stranded-fill")) {
     const grad = "linear-gradient(to right,#0d1117,#3b1578,#7b2fbe,#c77dff,#ff9ef7)";
     sections.push(legendSection("Stranded Shift Workers",
       `<div class="lg-gradient" style="background:${grad}"></div>` +
@@ -507,7 +509,8 @@ function renderLegend() {
       `<div style="font-size:10px;color:#8b949e;margin-top:3px">` +
       `Sum of unserved shift-work OD trips touching each block group.</div>`
     ));
-  } else if (isLayerVisible("equity-fill")) {
+  }
+  if (isLayerVisible("equity-fill")) {
     sections.push(legendSection("LISA Bivariate Clusters (TDI × Service Loss)",
       legendRow(swatch("#d73027", 0.8), "HH — High Need + Poor Service") +
       legendRow(swatch("#fc8d59", 0.8), "HL — High Need + OK Service") +
