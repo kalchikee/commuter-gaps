@@ -331,14 +331,34 @@
         </div>
         <div class="stat-row">
           <span>Proposed routes</span>
-          <span class="stat-val">3</span>
+          <span class="stat-val">5</span>
+        </div>
+        <div class="stat-row">
+          <span>System cost — year 1 (2026)</span>
+          <span class="stat-val" id="stat-system-cost">—</span>
+        </div>
+        <div class="stat-row" style="border-bottom:none;">
+          <span>Steady-state op/year</span>
+          <span class="stat-val" id="stat-system-op">—</span>
+        </div>
+      </div>
+
+      <!-- Per-route cost table -->
+      <div class="panel-section">
+        <h3>Proposed Routes (2026 cost)</h3>
+        <div id="route-cost-list" style="font-size:11px; color:#c9d1d9;">
+          <!-- filled by JS renderRouteCosts() -->
+        </div>
+        <div style="font-size:10px; color:#6e7681; margin-top:8px; line-height:1.4;">
+          60-min overnight headway · 6 h/night · CNG coaches · $200/RVH.
+          Click or hover a route on the map for detail.
         </div>
       </div>
 
       <!-- Feature info -->
       <div class="panel-section" style="border-bottom: none;">
         <h3>Selected Feature</h3>
-        <div id="info-panel">Click a block group to see details.</div>
+        <div id="info-panel">Click or hover a block group, route, or anchor for details.</div>
       </div>
 
     </div>
@@ -372,6 +392,46 @@ function fmtFloat(v, digits) {
   return (+v).toFixed(digits ?? 3);
 }
 
+// ── Per-route cost breakdown + system totals ──────────────────────────────────
+function renderRouteCosts() {
+  const el = document.getElementById("route-cost-list");
+  if (!el) return;
+  let opSum = 0, capSum = 0, y1Sum = 0;
+  const rows = (ROUTES_DATA.features || []).map(f => {
+    const p = f.properties;
+    const color = (ROUTE_DEFS.find(r => r.id === p.route_id) || {}).color || "#888";
+    opSum  += +p.annual_operating || 0;
+    capSum += +p.total_capital    || 0;
+    y1Sum  += +p.year_one_total   || 0;
+    return `
+      <div style="display:flex; gap:6px; padding:6px 0; border-bottom:1px solid #21262d; align-items:flex-start;">
+        <div style="width:3px; min-height:36px; background:${color}; border-radius:1px; margin-top:2px;"></div>
+        <div style="flex:1;">
+          <div style="color:#f0f6fc; font-weight:500;">${p.name || "Route " + p.route_id}</div>
+          <div style="color:#8b949e; font-size:10px; margin-top:2px;">
+            ${(+p.length_km || 0).toFixed(1)} km · ${p.n_buses || "?"} bus${p.n_buses === 1 ? "" : "es"} ·
+            ${fmtNum(p.estimated_daily_riders)} riders/day
+          </div>
+          <div style="display:flex; justify-content:space-between; margin-top:3px; gap:6px;">
+            <span style="color:#8b949e;">Year-1</span>
+            <span style="color:#2f81f7; font-weight:600;">${fmtUSD(p.year_one_total)}</span>
+          </div>
+          <div style="display:flex; justify-content:space-between; font-size:10px; color:#6e7681;">
+            <span>op ${fmtUSD(p.annual_operating)}/yr</span>
+            <span>capital ${fmtUSD(p.total_capital)}</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join("");
+  el.innerHTML = rows;
+
+  const sysCost = document.getElementById("stat-system-cost");
+  const sysOp   = document.getElementById("stat-system-op");
+  if (sysCost) sysCost.textContent = fmtUSD(y1Sum);
+  if (sysOp)   sysOp.textContent   = fmtUSD(opSum);
+}
+
 // ── Compute stats ─────────────────────────────────────────────────────────────
 function computeStats() {
   let noService = 0, deltaSum = 0, unservedSum = 0, count = 0;
@@ -387,7 +447,6 @@ function computeStats() {
   document.getElementById("stat-unserved").textContent =
     unservedSum > 0 ? Math.round(unservedSum).toLocaleString() : "—";
 }
-computeStats();
 
 // ── Time slider ───────────────────────────────────────────────────────────────
 let animInterval = null;
@@ -448,7 +507,10 @@ function toggleLayer(layerId, cb) {
 }
 function toggleRouteLayer(cb) {
   if (!map) return;
-  ROUTE_LINE_IDS.concat(['route-stops']).forEach(id => {
+  const ids = ROUTE_LINE_IDS
+    .concat(ROUTE_DEFS.map(r => `route-hit-${r.id}`))
+    .concat(['route-stops']);
+  ids.forEach(id => {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
   });
   renderLegend();
@@ -723,6 +785,20 @@ function initMap() {
     // ── Proposed routes ────────────────────────────────────────────────────
     map.addSource("routes", { type: "geojson", data: ROUTES_DATA });
     ROUTE_DEFS.forEach(r => {
+      // Wide invisible click/hover target, per-route (14px catches hovers
+      // even when the visible 4px line is hard to hit precisely).
+      map.addLayer({
+        id: `route-hit-${r.id}`,
+        type: "line",
+        source: "routes",
+        filter: ["==", ["get","route_id"], r.id],
+        paint: {
+          "line-color": r.color,
+          "line-width": 14,
+          "line-opacity": 0.001,  // effectively invisible
+        }
+      });
+      // Visible line on top
       map.addLayer({
         id: `route-line-${r.id}`,
         type: "line",
@@ -785,7 +861,9 @@ function initMap() {
 
     // ── Hover tooltip + click pin-in-sidebar ───────────────────────────────
     const bgLayers     = ["transit-fill", "stranded-fill", "equity-fill"];
-    const routeLayers  = ROUTE_LINE_IDS;
+    // Attach interactions to the wider invisible hit layer so thin lines are
+    // still easy to hover/click.
+    const routeLayers  = ROUTE_DEFS.map(r => `route-hit-${r.id}`);
     const loadingEl    = document.getElementById("map-loading");
     if (loadingEl) loadingEl.style.display = "none";
 
@@ -851,6 +929,11 @@ function initMap() {
 
   });
 }
+
+// Now that fmtUSD / ROUTE_DEFS / fmtNum and the DOM are all defined,
+// populate the sidebar stats and the per-route cost panel.
+computeStats();
+renderRouteCosts();
 
 window.addEventListener("DOMContentLoaded", () => initMap());
 </script>
