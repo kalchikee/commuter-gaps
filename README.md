@@ -99,10 +99,12 @@ commuter-gaps/
 | Global Bivariate Moran's I (TDI × Service Loss) | **0.184** (p = 0.002) |
 | HH cluster minority share vs county average | **72.0% vs 59.5% (1.21x disparity)** |
 | Proposed Route 1 — South Side Medical Corridor (25.5 km) | ~730 est. riders/day |
-| Proposed Route 2 — Midway / Logistics Express (16.7 km) | ~130 est. riders/day |
-| Proposed Route 3 — West Side Hospital Link (23.3 km) | ~504 est. riders/day |
-| Proposed Route 4 — O'Hare Express (48.6 km) | ~473 est. riders/day |
-| Proposed Route 5 — South Suburban Amazon Link (33.1 km) | ~961 est. riders/day |
+| Proposed Route 2 — Midway / Logistics Express (14.5 km) | ~34 est. riders/day |
+| Proposed Route 3 — West Side Hospital Link (12.8 km) | ~252 est. riders/day |
+| Proposed Route 4 — O'Hare Express (33.5 km) | ~258 est. riders/day |
+| Proposed Route 5 — South Suburban Amazon Link (31.6 km) | ~586 est. riders/day |
+
+Route corridors are non-overlapping: each route's polyline is drawn on the road network and later routes exclude demand within 600 m of earlier routes, so ridership estimates aren't double-counted. Route 2's low number reflects only intermediate residential demand — most Midway/UPS riders would board at the anchors themselves, which aren't in this count.
 
 Shift-work trip counts are weighted by each destination block's share of jobs in Healthcare (NAICS 62), Accommodation/Food Services (NAICS 72), and Transportation/Warehousing (NAICS 48-49) — the sectors most dependent on overnight workers.
 

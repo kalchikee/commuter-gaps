@@ -140,7 +140,8 @@ def load_road_network():
     return G
 
 
-def _corridor_score(start_pt, end_pt, pts_with_weight, max_off_deg=0.04):
+def _corridor_score(start_pt, end_pt, pts_with_weight, max_off_deg=0.04,
+                     t_min=-0.1, t_max=1.1):
     """Return (t, pt, weight) tuples for pts that lie within the start→end
     corridor, filtered by an absolute off-axis cap (~4.5 km at Chicago
     latitude) and a relaxed t-range."""
@@ -157,17 +158,19 @@ def _corridor_score(start_pt, end_pt, pts_with_weight, max_off_deg=0.04):
         proj_x = sx + t * dx
         proj_y = sy + t * dy
         off_axis = ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
-        if -0.1 <= t <= 1.1 and off_axis <= max_off_deg:
+        if t_min <= t <= t_max and off_axis <= max_off_deg:
             scored.append((t, (px, py), weight))
     return scored
 
 
-def pick_ordered_waypoints(start_pt, end_pt, candidates, n_keep):
+def pick_ordered_waypoints(start_pt, end_pt, candidates, n_keep,
+                            max_off_deg=0.04):
     """candidates: list of ((lon, lat), demand_weight).
     Returns an ordered list [start, ...intermediate, end] where intermediate
     are the top-n_keep highest-demand points inside the corridor, traversed
     in projection order so the route doesn't zig-zag."""
-    scored = _corridor_score(start_pt, end_pt, candidates)
+    scored = _corridor_score(start_pt, end_pt, candidates,
+                              max_off_deg=max_off_deg)
     # Keep the n_keep highest-demand candidates, then sort by t for traversal
     scored.sort(key=lambda x: -x[2])
     kept = scored[:n_keep]
@@ -219,40 +222,49 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
 
     demand_proj = demand_pts.to_crs("EPSG:26916")
     remaining   = demand_proj.copy()
+    built_corridors_proj = []  # buffered polylines of routes already built
 
     # Route definitions: name, start anchor, end anchor, "candidate corridor"
     # bounding box (lon_min, lat_min, lon_max, lat_max) that bounds where
     # intermediate demand stops may be drawn from.
+    # `max_off_deg` is the half-width of the corridor in degrees (~0.01°/1.1 km).
+    # Tighter corridors → more direct express routes that don't detour to share
+    # arterials with other routes. Wider → more intermediate stops, more local.
     route_specs = [
         {
             "name": "Night Owl 1 — South Side Medical Corridor",
             "start": "Rush University Medical Center",
             "end":   "University of Chicago Medicine",
             "max_intermediate": 6,
+            "max_off_deg": 0.035,
         },
         {
             "name": "Night Owl 2 — Midway / Logistics Express",
             "start": "Midway Airport",
             "end":   "UPS Chicago Area Consolidation",
-            "max_intermediate": 6,
+            "max_intermediate": 5,
+            "max_off_deg": 0.025,
         },
         {
             "name": "Night Owl 3 — West Side Hospital Link",
             "start": "Northwestern Memorial Hospital",
             "end":   "Stroger Hospital (Cook County)",
-            "max_intermediate": 5,
+            "max_intermediate": 4,
+            "max_off_deg": 0.02,
         },
         {
             "name": "Night Owl 4 — O'Hare Express",
             "start": "O'Hare International Airport",
             "end":   "Northwestern Memorial Hospital",
-            "max_intermediate": 7,
+            "max_intermediate": 4,
+            "max_off_deg": 0.02,   # tight — keeps it on the Kennedy corridor
         },
         {
             "name": "Night Owl 5 — South Suburban Amazon Link",
             "start": "University of Chicago Medicine",
             "end":   "Amazon MDW6 (Markham)",
             "max_intermediate": 6,
+            "max_off_deg": 0.03,
         },
     ]
 
@@ -262,15 +274,24 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
         start_lonlat = anchors[spec["start"]]
         end_lonlat   = anchors[spec["end"]]
 
-        # Pull candidates from the remaining demand pool and score them against
-        # the start→end corridor — no manual bbox needed, the corridor does the
-        # geographic filtering on its own.
-        cand = remaining.to_crs("EPSG:4326")
+        # Candidate demand — start from the remaining pool, then drop anything
+        # within 600m of any already-built route polyline. This prevents later
+        # routes from being drawn through the same corridor as earlier ones
+        # just to pick up shared demand.
+        cand_proj = remaining
+        if built_corridors_proj:
+            from shapely.ops import unary_union
+            existing = unary_union(built_corridors_proj)
+            cand_proj = cand_proj[~cand_proj.geometry.within(existing)]
+
+        cand = cand_proj.to_crs("EPSG:4326")
         candidates = [((pt.x, pt.y), float(w))
                       for pt, w in zip(cand.geometry, cand["demand_weight"])]
 
         ordered = pick_ordered_waypoints(
-            start_lonlat, end_lonlat, candidates, spec["max_intermediate"]
+            start_lonlat, end_lonlat, candidates,
+            spec["max_intermediate"],
+            max_off_deg=spec.get("max_off_deg", 0.04),
         )
         line_4326 = route_on_roads(G, ordered)
 
@@ -295,8 +316,10 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
             "length_km": round(line_proj.length / 1000, 2),
         })
 
-        # Avoid double-crediting the same BGs to the next route's ridership
+        # Avoid double-crediting BGs to the next route
         remaining = remaining[~remaining.index.isin(covered.index)]
+        # And remember this polyline for the next route's exclusion buffer
+        built_corridors_proj.append(line_proj.buffer(600))
 
     return routes
 
