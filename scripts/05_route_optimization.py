@@ -219,9 +219,37 @@ def pick_ordered_waypoints(start_pt, end_pt, candidates, n_keep,
     return [start_pt] + [pt for _, pt, _ in kept] + [end_pt]
 
 
+def _edge_coords(G, u, v):
+    """Return the (lon, lat) vertices along the road edge u→v.
+
+    OSMnx's simplified graphs collapse many OSM nodes into single edges that
+    carry a `geometry` LineString attribute with the real road curve. Falling
+    back to just (u_xy, v_xy) was what caused routes to cut across blocks
+    instead of following the street.
+    """
+    data = G.get_edge_data(u, v)
+    if not data:
+        return [(G.nodes[u]["x"], G.nodes[u]["y"]),
+                (G.nodes[v]["x"], G.nodes[v]["y"])]
+    # MultiDiGraph: keyed by edge-key; pick the shortest parallel edge
+    best = min(data.values(), key=lambda d: d.get("length", float("inf")))
+    geom = best.get("geometry")
+    if geom is not None:
+        coords = list(geom.coords)
+        # OSMnx edge geometry isn't guaranteed to be u→v oriented; flip if needed
+        u_xy = (G.nodes[u]["x"], G.nodes[u]["y"])
+        if coords and coords[0] != u_xy and coords[-1] == u_xy:
+            coords = coords[::-1]
+        return coords
+    return [(G.nodes[u]["x"], G.nodes[u]["y"]),
+            (G.nodes[v]["x"], G.nodes[v]["y"])]
+
+
 def route_on_roads(G, waypoints_lonlat):
     """Snap an ordered list of (lon, lat) waypoints to the road network via
-    shortest-path between consecutive waypoints. Returns a LineString in EPSG:4326."""
+    shortest-path between consecutive waypoints, then stitch together each
+    edge's true road geometry (not just graph-node endpoints).
+    Returns a LineString in EPSG:4326."""
     xs = [p[0] for p in waypoints_lonlat]
     ys = [p[1] for p in waypoints_lonlat]
     try:
@@ -236,12 +264,15 @@ def route_on_roads(G, waypoints_lonlat):
         try:
             path = nx.shortest_path(G, a, b, weight="length")
         except (nx.NetworkXNoPath, nx.NodeNotFound):
-            # Fall back to direct segment
-            coords.append((G.nodes[a]["x"], G.nodes[a]["y"]))
-            coords.append((G.nodes[b]["x"], G.nodes[b]["y"]))
-            continue
-        for n in path:
-            xy = (G.nodes[n]["x"], G.nodes[n]["y"])
+            seg = [(G.nodes[a]["x"], G.nodes[a]["y"]),
+                   (G.nodes[b]["x"], G.nodes[b]["y"])]
+        else:
+            seg = []
+            for u, v in zip(path[:-1], path[1:]):
+                for xy in _edge_coords(G, u, v):
+                    if not seg or seg[-1] != xy:
+                        seg.append(xy)
+        for xy in seg:
             if not coords or coords[-1] != xy:
                 coords.append(xy)
 
