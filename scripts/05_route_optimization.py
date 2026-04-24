@@ -531,11 +531,11 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     #hover-tooltip .tt-label {{ color: #8b949e; }}
     #hover-tooltip .tt-val   {{ color: #e6edf3; font-variant-numeric: tabular-nums; }}
 
-    /* On-map legend — floats above the map, bottom-left */
+    /* On-map legend — anchored to the map container, bottom-left corner */
     #map-legend {{
       position: absolute;
-      bottom: 28px;
-      left: 340px;
+      bottom: 16px;
+      left: 16px;
       background: rgba(22, 27, 34, 0.94);
       border: 1px solid #30363d;
       border-radius: 8px;
@@ -733,7 +733,7 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     .stat-val {{ font-weight: 600; color: #2f81f7; }}
 
     /* Map */
-    #map {{ flex: 1; }}
+    #map {{ flex: 1; position: relative; }}
 
     /* Loading overlay */
     #map-loading {{
