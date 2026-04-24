@@ -692,6 +692,7 @@ def build_web_map(gdf: gpd.GeoDataFrame,
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>The Invisible Commute — Chicago Overnight Transit Gaps</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%230d1117'/%3E%3Ccircle cx='8' cy='8' r='4' fill='%232f81f7'/%3E%3C/svg%3E" />
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
   <style>
@@ -927,7 +928,8 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     .stat-val {{ font-weight: 600; color: #2f81f7; }}
 
     /* Map */
-    #map {{ flex: 1; position: relative; }}
+    #map-wrapper {{ flex: 1; position: relative; }}
+    #map {{ position: absolute; inset: 0; }}
 
     /* Loading overlay */
     #map-loading {{
@@ -1064,7 +1066,8 @@ def build_web_map(gdf: gpd.GeoDataFrame,
 
     </div>
 
-    <div id="map">
+    <div id="map-wrapper">
+      <div id="map"></div>
       <div id="map-loading">Loading map…</div>
       <div id="map-legend"></div>
     </div>
