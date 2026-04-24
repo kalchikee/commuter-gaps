@@ -366,8 +366,8 @@ def make_ej_summary(gdf: gpd.GeoDataFrame):
         ax.set_title(label, color="white", fontsize=11)
         ax.set_ylabel("Percent (%)", color="white")
         ax.tick_params(colors="white", labelsize=8)
-        for spine in ax.spines.values():
-            ax.spines[spine if isinstance(spine, str) else "top"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
         ax.spines["bottom"].set_edgecolor("#555555")
         ax.spines["left"].set_edgecolor("#555555")
         ax.yaxis.label.set_color("white")

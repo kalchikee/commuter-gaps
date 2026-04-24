@@ -84,8 +84,8 @@ commuter-gaps/
 ├── outputs/
 │   ├── maps/         # Static cartographic outputs
 │   └── figures/      # Charts and statistical plots
-└── web/
-    └── index.html    # Interactive Mapbox GL JS application
+└── docs/
+    └── index.html    # Interactive Mapbox GL JS application (GitHub Pages)
 ```
 
 ## Key Findings
@@ -93,12 +93,16 @@ commuter-gaps/
 | Metric | Value |
 |--------|-------|
 | Cook County block groups with **zero** overnight transit service | **2,543 / 4,002 (63.5%)** |
-| Cook County shift-work OD pairs unserved at 2 AM | **1,234,895 / 1,564,001 (79.0%)** |
+| Mean transit access delta (8 AM → 2 AM) | **32.7%** |
+| Cook County shift-work OD trips unserved at 2 AM (weighted by dest shift-share) | **392,390 / 486,580 (80.6%)** |
+| Cook County all-sector OD pairs unserved at 2 AM | **1,234,895 / 1,564,001 (79.0%)** |
 | Global Bivariate Moran's I (TDI × Service Loss) | **0.184** (p = 0.002) |
-| HH cluster minority share vs county average | **71.3% vs 59.5% (1.20x disparity)** |
-| Proposed Route 1 — South Side Medical Corridor | ~775 est. riders/day |
-| Proposed Route 2 — Airport / Logistics Express | ~334 est. riders/day |
-| Proposed Route 3 — West Side Hospital Link | ~283 est. riders/day |
+| HH cluster minority share vs county average | **72.0% vs 59.5% (1.21x disparity)** |
+| Proposed Route 1 — South Side Medical Corridor (25.5 km) | ~730 est. riders/day |
+| Proposed Route 2 — Midway / Logistics Express (16.7 km) | ~130 est. riders/day |
+| Proposed Route 3 — West Side Hospital Link (23.3 km) | ~504 est. riders/day |
+
+Shift-work trip counts are weighted by each destination block's share of jobs in Healthcare (NAICS 62), Accommodation/Food Services (NAICS 72), and Transportation/Warehousing (NAICS 48-49) — the sectors most dependent on overnight workers.
 
 ## Deliverables
 
@@ -106,7 +110,7 @@ commuter-gaps/
 - [x] Stranded Worker Density heatmap with employment flow overlays → `outputs/maps/stranded_workers.png`
 - [x] Equity hot spot analysis (LISA bivariate clustering) → `outputs/maps/equity_hotspots.png`
 - [x] Proposed late-night route map with ridership estimates → `outputs/maps/proposed_routes.png`
-- [x] Interactive web application with time-of-day layer toggle → `web/index.html`
+- [x] Interactive web application with hover tooltips and layer toggles → `docs/index.html`
 - [x] All processed data → `data/processed/`
 
 ## Running the Analysis

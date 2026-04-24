@@ -20,6 +20,12 @@ Thumbs.db
 outputs/figures/*.png
 outputs/figures/*.pdf
 
+# OSMnx cache (regenerated on first run)
+cache/
+
+# Planning / working docs
+Project Plan.docx
+
 # Secrets
 *.env
 config.ini

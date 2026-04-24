@@ -33,12 +33,15 @@ PROC = ROOT / "data" / "processed"
 MAPS = ROOT / "outputs" / "maps"
 MAPS.mkdir(parents=True, exist_ok=True)
 
-# NAICS sectors associated with overnight / shift work
+# NAICS sectors associated with overnight / shift work.
+# Codes follow LODES 8 WAC super-sector naming:
+#   CNS08 = Transportation & Warehousing (NAICS 48-49)
+#   CNS16 = Health Care & Social Assistance (NAICS 62)
+#   CNS18 = Accommodation & Food Services (NAICS 72)
 SHIFT_WORK_SECTORS = {
-    "CNS07": "Healthcare & Social Assistance",   # NAICS 62
-    "CNS08": "Accommodation & Food Services",    # NAICS 72
-    "CNS05": "Transportation & Warehousing",     # NAICS 48-49
-    "CNS20": "Accommodation",                    # NAICS 721
+    "CNS16": "Health Care & Social Assistance",
+    "CNS18": "Accommodation & Food Services",
+    "CNS08": "Transportation & Warehousing",
 }
 
 # Cook County FIPS prefix
@@ -60,18 +63,26 @@ def load_crosswalk() -> pd.DataFrame:
 
 
 def load_wac() -> pd.DataFrame:
-    """Load Workplace Area Characteristics to get sector employment counts per block."""
+    """Load Workplace Area Characteristics to get sector employment counts per block.
+    Returns w_geocode → (shift_jobs, total_jobs, shift_share)."""
     wac_path = RAW / "lodes" / "il_wac_S000_JT00_2021.csv.gz"
     if not wac_path.exists():
         raise FileNotFoundError("WAC not found — run 01_download_data.py")
 
-    cols = ["w_geocode"] + list(SHIFT_WORK_SECTORS.keys())
     wac = pd.read_csv(wac_path, dtype={"w_geocode": str})
-    available = [c for c in cols if c in wac.columns]
-    wac = wac[available].copy()
     wac["w_geocode"] = wac["w_geocode"].str.zfill(15)
-    wac["shift_jobs"] = wac[[c for c in SHIFT_WORK_SECTORS if c in wac.columns]].sum(axis=1)
-    return wac[["w_geocode", "shift_jobs"]]
+
+    sector_cols = [c for c in SHIFT_WORK_SECTORS if c in wac.columns]
+    missing = set(SHIFT_WORK_SECTORS) - set(sector_cols)
+    if missing:
+        print(f"  WARNING: missing WAC sector columns: {sorted(missing)}")
+
+    wac["shift_jobs"] = wac[sector_cols].sum(axis=1) if sector_cols else 0
+    wac["total_jobs"] = wac["C000"] if "C000" in wac.columns else wac["shift_jobs"]
+    wac["shift_share"] = np.where(
+        wac["total_jobs"] > 0, wac["shift_jobs"] / wac["total_jobs"], 0.0
+    )
+    return wac[["w_geocode", "shift_jobs", "total_jobs", "shift_share"]]
 
 
 def load_od() -> pd.DataFrame:
@@ -120,14 +131,17 @@ def build_block_centroids(xwalk: pd.DataFrame) -> gpd.GeoDataFrame:
         geometry=gpd.points_from_xy(cook_xwalk["lon"], cook_xwalk["lat"]),
         crs="EPSG:4326",
     )
+    gdf = gdf.drop_duplicates(subset="block")
     return gdf.set_index("block")[["block_group", "geometry"]].copy()
 
 
 def classify_served(od: pd.DataFrame,
                     block_centroids: gpd.GeoDataFrame,
-                    transit_bg: gpd.GeoDataFrame) -> pd.DataFrame:
+                    transit_bg: gpd.GeoDataFrame,
+                    wac: pd.DataFrame) -> pd.DataFrame:
     """Tag each OD pair as served / unserved based on 2 AM transit coverage.
     Only classifies pairs where BOTH home and work blocks are in Cook County.
+    Adds a `shift_workers` weight = S000 × shift-work share at the destination block.
     """
 
     # Build lookup: block → overnight_stops (via block group)
@@ -148,8 +162,14 @@ def classify_served(od: pd.DataFrame,
     od["h_overnight"] = od["h_bg"].map(bg_service["overnight_stops"]).fillna(0)
     od["w_overnight"] = od["w_bg"].map(bg_service["overnight_stops"]).fillna(0)
 
-    od["served"] = (od["h_overnight"] > 0) & (od["w_overnight"] > 0)
+    od["served"]   = (od["h_overnight"] > 0) & (od["w_overnight"] > 0)
     od["unserved"] = ~od["served"]
+
+    # Estimated shift-work weight per OD pair:
+    # scale total jobs (S000) by the shift-work employment share at the work block
+    shift_share = wac.set_index("w_geocode")["shift_share"]
+    od["shift_share_dest"] = od["w_geocode"].map(shift_share).fillna(0.0)
+    od["shift_workers"] = od["S000"] * od["shift_share_dest"]
 
     return od
 
@@ -158,19 +178,12 @@ def build_flow_lines(od: pd.DataFrame,
                      block_centroids: gpd.GeoDataFrame,
                      wac: pd.DataFrame,
                      max_flows: int = 5000) -> gpd.GeoDataFrame:
-    """Build flow line GeoDataFrame for top unserved OD pairs."""
+    """Build flow line GeoDataFrame for top unserved OD pairs (shift-work weighted)."""
 
-    # Filter to shift-work jobs at destination
-    od = od.merge(wac, left_on="w_geocode", right_on="w_geocode", how="left")
-    od["shift_jobs"] = od["shift_jobs"].fillna(0)
-    od["flow_weight"] = od["S000"] * (od["shift_jobs"] > 0).astype(int)
-
-    # Top unserved flows
-    unserved = od[od["unserved"] & (od["flow_weight"] > 0)].nlargest(max_flows, "flow_weight")
-
-    coords_h = block_centroids.loc[unserved["h_geocode"].values]["geometry"] \
-        if unserved["h_geocode"].isin(block_centroids.index).all() \
-        else None
+    # Filter to pairs with any shift-work jobs at destination. Weight by
+    # shift-worker volume (S000 * shift_share_dest) already computed in classify_served.
+    cand = od[od["unserved"] & (od["shift_share_dest"] > 0) & (od["shift_workers"] > 0)]
+    unserved = cand.nlargest(max_flows, "shift_workers")
 
     records = []
     for _, row in unserved.iterrows():
@@ -182,9 +195,9 @@ def build_flow_lines(od: pd.DataFrame,
             records.append({
                 "h_geocode": h_gc,
                 "w_geocode": w_gc,
-                "total_jobs": row["S000"],
-                "shift_jobs": row["shift_jobs"],
-                "flow_weight": row["flow_weight"],
+                "total_jobs":     int(row["S000"]),
+                "shift_workers":  round(float(row["shift_workers"]), 2),
+                "shift_share_dest": round(float(row["shift_share_dest"]), 3),
                 "h_bg": row.get("h_bg"),
                 "w_bg": row.get("w_bg"),
                 "geometry": LineString([h_pt, w_pt]),
@@ -200,22 +213,25 @@ def build_flow_lines(od: pd.DataFrame,
 
 def build_stranded_density(od: pd.DataFrame,
                             bg: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Aggregate unserved workers to block group level."""
+    """Aggregate unserved shift workers to block group level.
+
+    `shift_workers` is S000 × shift-work sector share at the destination block,
+    so the density surface reflects stranded SHIFT workers (healthcare,
+    accommodation, transportation) rather than all commuters.
+    """
 
     unserved = od[od["unserved"]].copy()
 
-    # Count unserved trips by home block group
     home_agg = (
         unserved.groupby("h_bg")
-        .agg(unserved_home=("S000", "sum"), flow_count=("S000", "count"))
+        .agg(unserved_home=("shift_workers", "sum"), flow_count=("shift_workers", "count"))
         .reset_index()
         .rename(columns={"h_bg": "GEOID"})
     )
 
-    # Count unserved trips by work block group
     work_agg = (
         unserved.groupby("w_bg")
-        .agg(unserved_work=("S000", "sum"))
+        .agg(unserved_work=("shift_workers", "sum"))
         .reset_index()
         .rename(columns={"w_bg": "GEOID"})
     )
@@ -223,14 +239,16 @@ def build_stranded_density(od: pd.DataFrame,
     result = bg.copy()
     result = result.merge(home_agg, on="GEOID", how="left")
     result = result.merge(work_agg, on="GEOID", how="left")
-    result["unserved_home"] = result["unserved_home"].fillna(0)
-    result["unserved_work"] = result["unserved_work"].fillna(0)
-    result["stranded_density"] = result["unserved_home"] + result["unserved_work"]
+    result["unserved_home"] = result["unserved_home"].fillna(0).round(1)
+    result["unserved_work"] = result["unserved_work"].fillna(0).round(1)
+    result["stranded_density"] = (result["unserved_home"] + result["unserved_work"]).round(1)
 
     # Normalize to per sq km
     result_proj = result.to_crs("EPSG:26916")
     result["area_sqkm"] = result_proj.geometry.area / 1e6
-    result["stranded_per_sqkm"] = (result["stranded_density"] / result["area_sqkm"].clip(lower=0.01)).round(1)
+    result["stranded_per_sqkm"] = (
+        result["stranded_density"] / result["area_sqkm"].clip(lower=0.01)
+    ).round(1)
 
     return result
 
@@ -265,14 +283,19 @@ def run_lodes_analysis():
         return
 
     print("Classifying served/unserved trips …")
-    od = classify_served(od, block_centroids, transit_bg)
+    od = classify_served(od, block_centroids, transit_bg, wac)
 
     total = len(od)
     served   = od["served"].sum()
     unserved = od["unserved"].sum()
-    print(f"  Total Cook County OD pairs:  {total:,}")
-    print(f"  Served (transit available):  {served:,} ({served/total*100:.1f}%)")
-    print(f"  Unserved (no transit):       {unserved:,} ({unserved/total*100:.1f}%)")
+    shift_total    = od["shift_workers"].sum()
+    shift_unserved = od.loc[od["unserved"], "shift_workers"].sum()
+    print(f"  Total Cook County OD pairs:       {total:,}")
+    print(f"  Served  (any-sector):             {served:,} ({served/total*100:.1f}%)")
+    print(f"  Unserved (any-sector):            {unserved:,} ({unserved/total*100:.1f}%)")
+    print(f"  Shift-work weighted trips total:  {shift_total:,.0f}")
+    print(f"  Shift-work unserved:              {shift_unserved:,.0f} "
+          f"({(shift_unserved/shift_total*100 if shift_total else 0):.1f}% of shift trips)")
 
     print("Building OD flow lines …")
     flows = build_flow_lines(od, block_centroids, wac, max_flows=3000)

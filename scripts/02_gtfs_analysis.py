@@ -41,9 +41,8 @@ MAPS.mkdir(parents=True, exist_ok=True)
 
 # Time windows (seconds from midnight)
 PEAK_TIME      = 8 * 3600          # 08:00
-OVERNIGHT_TIME = 2 * 3600          # 02:00  (next day trips use 26*3600 convention)
-OVERNIGHT_ALT  = 26 * 3600         # 02:00 as 26:00 in GTFS extended format
-WINDOW_SEC     = 3600              # ±30 min around target time
+OVERNIGHT_TIME = 2 * 3600          # 02:00  (overnight trips often encoded as 26:00 in GTFS)
+WINDOW_SEC     = 3600              # ±1 hour around target time (2-hour total window)
 WALK_BUFFER_M  = 400               # meters — ~5 minute walk
 
 
@@ -76,7 +75,10 @@ def get_active_stops(stop_times: pd.DataFrame,
     lo = target_sec - window
     hi = target_sec + window
 
-    # Also handle overnight trips expressed as 24h+ times
+    # GTFS encodes trips that continue past midnight with hours ≥ 24 (e.g. 26:00 = 2 AM).
+    # Only consider the "+24h" band when the target window itself is in the overnight
+    # hours — otherwise peak analyses incorrectly sweep up late-running services.
+    use_alt_band = target_sec < 6 * 3600
     lo_alt = lo + 24 * 3600
     hi_alt = hi + 24 * 3600
 
@@ -98,10 +100,9 @@ def get_active_stops(stop_times: pd.DataFrame,
     else:
         st["dep_sec"] = st["departure_time"]
 
-    mask = (
-        ((st["dep_sec"] >= lo) & (st["dep_sec"] <= hi)) |
-        ((st["dep_sec"] >= lo_alt) & (st["dep_sec"] <= hi_alt))
-    )
+    mask = (st["dep_sec"] >= lo) & (st["dep_sec"] <= hi)
+    if use_alt_band:
+        mask |= (st["dep_sec"] >= lo_alt) & (st["dep_sec"] <= hi_alt)
     return st[mask]["stop_id"].unique()
 
 
@@ -166,12 +167,25 @@ def run_gtfs_analysis():
             feed = ptg.load_feed(str(gtfs_dir))
             stops = feed.stops.copy()
             stops["agency"] = agency
+            stops["stop_id"] = agency + ":" + stops["stop_id"].astype(str)
             all_stops.append(stops)
-            all_stop_times.append(feed.stop_times)
+
+            # Namespace service_id and stop_id across agencies to avoid collisions
+            # (CTA and Pace both use simple numeric IDs that can overlap).
+            st = feed.stop_times.copy()
+            st["trip_id"] = agency + ":" + st["trip_id"].astype(str)
+            st["stop_id"] = agency + ":" + st["stop_id"].astype(str)
+            all_stop_times.append(st)
+
             trips = feed.trips.copy()
-            trips["agency"] = agency
+            trips["agency"]     = agency
+            trips["trip_id"]    = agency + ":" + trips["trip_id"].astype(str)
+            trips["service_id"] = agency + ":" + trips["service_id"].astype(str)
             all_trips.append(trips)
-            all_calendar.append(feed.calendar)
+
+            cal = feed.calendar.copy()
+            cal["service_id"] = agency + ":" + cal["service_id"].astype(str)
+            all_calendar.append(cal)
         except Exception as e:
             print(f"  ERROR loading {agency}: {e}")
 
@@ -179,10 +193,10 @@ def run_gtfs_analysis():
         print("No GTFS data loaded. Exiting.")
         return
 
-    stops_df   = pd.concat(all_stops, ignore_index=True)
-    st_df      = pd.concat(all_stop_times, ignore_index=True)
-    trips_df   = pd.concat(all_trips, ignore_index=True)
-    calendar_df = pd.concat(all_calendar, ignore_index=True).drop_duplicates()
+    stops_df    = pd.concat(all_stops, ignore_index=True).drop_duplicates(subset="stop_id")
+    st_df       = pd.concat(all_stop_times, ignore_index=True)
+    trips_df    = pd.concat(all_trips, ignore_index=True)
+    calendar_df = pd.concat(all_calendar, ignore_index=True)
 
     print(f"  Total stops: {len(stops_df):,}")
     print(f"  Total stop-times: {len(st_df):,}")

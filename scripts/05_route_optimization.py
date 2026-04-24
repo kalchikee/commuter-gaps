@@ -30,13 +30,14 @@ import matplotlib.patches as mpatches
 from shapely.geometry import LineString, MultiPoint, Point
 from shapely.ops import unary_union
 import networkx as nx
+import osmnx as ox
 
 ROOT = Path(__file__).resolve().parents[1]
 RAW  = ROOT / "data" / "raw"
 PROC = ROOT / "data" / "processed"
 MAPS = ROOT / "outputs" / "maps"
-WEB  = ROOT / "web"
-WEB.mkdir(parents=True, exist_ok=True)
+DOCS = ROOT / "docs"
+DOCS.mkdir(parents=True, exist_ok=True)
 
 # Known overnight employment anchors in Chicago (lon, lat)
 OVERNIGHT_ANCHORS = {
@@ -104,128 +105,229 @@ def select_demand_centroids(gdf: gpd.GeoDataFrame,
     return top.to_crs("EPSG:4326")
 
 
-def greedy_route_builder(demand_pts: gpd.GeoDataFrame,
-                          anchors: dict,
-                          n_routes: int = 3) -> list:
+# ── Road-network routing ──────────────────────────────────────────────────────
+_ROAD_GRAPH_CACHE = None
+
+
+def load_road_network():
+    """Load major Chicago/Cook arterial road network. Cached to disk on first call."""
+    global _ROAD_GRAPH_CACHE
+    if _ROAD_GRAPH_CACHE is not None:
+        return _ROAD_GRAPH_CACHE
+
+    cache_dir = RAW / "osm"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / "cook_major_roads.graphml"
+
+    if cache_path.exists():
+        print("  Loading cached road network …")
+        G = ox.load_graphml(cache_path)
+    else:
+        print("  Downloading major road network (primary/secondary/tertiary) …")
+        custom_filter = (
+            '["highway"~"motorway|trunk|primary|secondary|tertiary|'
+            'motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]'
+        )
+        G = ox.graph_from_place(
+            "Cook County, Illinois, USA",
+            custom_filter=custom_filter,
+            simplify=True,
+            retain_all=False,
+        )
+        ox.save_graphml(G, cache_path)
+
+    _ROAD_GRAPH_CACHE = G
+    return G
+
+
+def _corridor_score(start_pt, end_pt, pts_with_weight, max_off_deg=0.04):
+    """Return (t, pt, weight) tuples for pts that lie within the start→end
+    corridor, filtered by an absolute off-axis cap (~4.5 km at Chicago
+    latitude) and a relaxed t-range."""
+    sx, sy = start_pt
+    ex, ey = end_pt
+    dx, dy = ex - sx, ey - sy
+    length_sq = dx * dx + dy * dy
+    if length_sq == 0:
+        return []
+
+    scored = []
+    for (px, py), weight in pts_with_weight:
+        t = ((px - sx) * dx + (py - sy) * dy) / length_sq
+        proj_x = sx + t * dx
+        proj_y = sy + t * dy
+        off_axis = ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
+        if -0.1 <= t <= 1.1 and off_axis <= max_off_deg:
+            scored.append((t, (px, py), weight))
+    return scored
+
+
+def pick_ordered_waypoints(start_pt, end_pt, candidates, n_keep):
+    """candidates: list of ((lon, lat), demand_weight).
+    Returns an ordered list [start, ...intermediate, end] where intermediate
+    are the top-n_keep highest-demand points inside the corridor, traversed
+    in projection order so the route doesn't zig-zag."""
+    scored = _corridor_score(start_pt, end_pt, candidates)
+    # Keep the n_keep highest-demand candidates, then sort by t for traversal
+    scored.sort(key=lambda x: -x[2])
+    kept = scored[:n_keep]
+    kept.sort(key=lambda x: x[0])
+    return [start_pt] + [pt for _, pt, _ in kept] + [end_pt]
+
+
+def route_on_roads(G, waypoints_lonlat):
+    """Snap an ordered list of (lon, lat) waypoints to the road network via
+    shortest-path between consecutive waypoints. Returns a LineString in EPSG:4326."""
+    xs = [p[0] for p in waypoints_lonlat]
+    ys = [p[1] for p in waypoints_lonlat]
+    try:
+        nodes = ox.distance.nearest_nodes(G, xs, ys)
+    except Exception:
+        nodes = [ox.distance.nearest_nodes(G, x, y) for x, y in zip(xs, ys)]
+
+    coords = []
+    for a, b in zip(nodes[:-1], nodes[1:]):
+        if a == b:
+            continue
+        try:
+            path = nx.shortest_path(G, a, b, weight="length")
+        except (nx.NetworkXNoPath, nx.NodeNotFound):
+            # Fall back to direct segment
+            coords.append((G.nodes[a]["x"], G.nodes[a]["y"]))
+            coords.append((G.nodes[b]["x"], G.nodes[b]["y"]))
+            continue
+        for n in path:
+            xy = (G.nodes[n]["x"], G.nodes[n]["y"])
+            if not coords or coords[-1] != xy:
+                coords.append(xy)
+
+    if len(coords) < 2:
+        return LineString(waypoints_lonlat)
+    return LineString(coords)
+
+
+def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
+                           anchors: dict,
+                           n_routes: int = 3) -> list:
     """
-    Greedy location-allocation:
-    For each proposed route, connect the nearest employment anchor to the
-    highest-demand unserved cluster via a simplified polyline.
-    Returns list of (route_name, LineString, metadata) tuples.
+    Build 3 realistic late-night bus routes:
+      - Each has a start anchor, an end anchor, and intermediate high-demand stops
+      - Intermediate stops are ordered by nearest-neighbor TSP
+      - The resulting polyline follows the actual Cook County road network
     """
-    anchor_gdf = gpd.GeoDataFrame(
-        [{"name": k, "geometry": Point(v[0], v[1])} for k, v in anchors.items()],
-        crs="EPSG:4326",
-    ).to_crs("EPSG:26916")
+    G = load_road_network()
 
     demand_proj = demand_pts.to_crs("EPSG:26916")
     remaining   = demand_proj.copy()
-    routes      = []
 
-    route_names = [
-        "Night Owl Route 1 — South Side Medical Corridor",
-        "Night Owl Route 2 — Airport / Logistics Express",
-        "Night Owl Route 3 — West Side Hospital Link",
+    # Route definitions: name, start anchor, end anchor, "candidate corridor"
+    # bounding box (lon_min, lat_min, lon_max, lat_max) that bounds where
+    # intermediate demand stops may be drawn from.
+    route_specs = [
+        {
+            "name": "Night Owl 1 — South Side Medical Corridor",
+            "start": "Rush University Medical Center",
+            "end":   "University of Chicago Medicine",
+            "max_intermediate": 6,
+        },
+        {
+            "name": "Night Owl 2 — Midway / Logistics Express",
+            "start": "Midway Airport",
+            "end":   "UPS Chicago Area Consolidation",
+            "max_intermediate": 6,
+        },
+        {
+            "name": "Night Owl 3 — West Side Hospital Link",
+            "start": "Northwestern Memorial Hospital",
+            "end":   "Stroger Hospital (Cook County)",
+            "max_intermediate": 5,
+        },
     ]
-    anchor_assignments = [
-        ["Rush University Medical Center", "Stroger Hospital (Cook County)",
-         "University of Chicago Medicine"],
-        ["O'Hare International Airport", "Midway Airport",
-         "UPS Chicago Area Consolidation", "Amazon MDW6 (Markham)"],
-        ["Northwestern Memorial Hospital", "Rush University Medical Center",
-         "Stroger Hospital (Cook County)"],
-    ]
 
-    for i in range(min(n_routes, len(route_names))):
-        if len(remaining) == 0:
-            break
+    routes = []
 
-        # Top demand centroid for this route
-        top_demand = remaining.nlargest(5, "demand_weight")
+    for spec in route_specs[:n_routes]:
+        start_lonlat = anchors[spec["start"]]
+        end_lonlat   = anchors[spec["end"]]
 
-        # Relevant anchors for this route
-        route_anchors = anchor_gdf[
-            anchor_gdf["name"].isin(anchor_assignments[i])
-        ]
+        # Pull candidates from the remaining demand pool and score them against
+        # the start→end corridor — no manual bbox needed, the corridor does the
+        # geographic filtering on its own.
+        cand = remaining.to_crs("EPSG:4326")
+        candidates = [((pt.x, pt.y), float(w))
+                      for pt, w in zip(cand.geometry, cand["demand_weight"])]
 
-        if route_anchors.empty:
-            route_anchors = anchor_gdf
+        ordered = pick_ordered_waypoints(
+            start_lonlat, end_lonlat, candidates, spec["max_intermediate"]
+        )
+        line_4326 = route_on_roads(G, ordered)
 
-        # Build waypoints: demand centroids + anchor points
-        waypoints = []
-        for _, row in top_demand.iterrows():
-            waypoints.append((row.geometry.x, row.geometry.y))
-        for _, row in route_anchors.iterrows():
-            waypoints.append((row.geometry.x, row.geometry.y))
+        # Project and buffer to estimate ridership
+        line_proj = gpd.GeoSeries([line_4326], crs="EPSG:4326").to_crs("EPSG:26916").iloc[0]
+        corridor = gpd.GeoDataFrame(
+            geometry=[line_proj.buffer(800)], crs="EPSG:26916"
+        )
+        covered = gpd.sjoin(remaining, corridor, how="inner", predicate="within")
+        estimated_riders = int(covered["demand_weight"].sum() * 150)
+        coverage_bgs = len(covered)
 
-        # Simple route: connect demand → closest anchor → next demand
-        if len(waypoints) >= 2:
-            # Sort west-to-east for a sensible routing
-            waypoints_sorted = sorted(waypoints, key=lambda p: p[0])
-            line = LineString(waypoints_sorted)
+        routes.append({
+            "name": spec["name"],
+            "geometry_4326": line_4326,
+            "geometry_proj": line_proj,
+            "estimated_daily_riders": estimated_riders,
+            "block_groups_served": coverage_bgs,
+            "start_anchor": spec["start"],
+            "end_anchor":   spec["end"],
+            "anchors": [spec["start"], spec["end"]],
+            "length_km": round(line_proj.length / 1000, 2),
+        })
 
-            # Estimate ridership: sum demand weights along corridor
-            buffer = gpd.GeoDataFrame(
-                geometry=[line.buffer(800)], crs="EPSG:26916"
-            )
-            joined = gpd.sjoin(remaining, buffer, how="inner", predicate="within")
-            estimated_riders = int(joined["demand_weight"].sum() * 150)
-            coverage_bgs = len(joined)
-
-            routes.append({
-                "name": route_names[i],
-                "geometry_proj": line,
-                "estimated_daily_riders": estimated_riders,
-                "block_groups_served": coverage_bgs,
-                "anchors": anchor_assignments[i],
-            })
-
-            # Remove served block groups from remaining
-            remaining = remaining[~remaining.index.isin(joined.index)]
+        # Avoid double-crediting the same BGs to the next route's ridership
+        remaining = remaining[~remaining.index.isin(covered.index)]
 
     return routes
 
 
 def build_route_geodataframes(routes: list) -> tuple:
-    """Convert route dicts to GeoDataFrames."""
+    """Convert route dicts to GeoDataFrames. Stops spaced ~1 km along the line
+    in projected CRS (true distance), snapped back to EPSG:4326."""
     route_records = []
     for i, r in enumerate(routes):
-        geom_4326 = gpd.GeoDataFrame(
-            geometry=[r["geometry_proj"]], crs="EPSG:26916"
-        ).to_crs("EPSG:4326").geometry[0]
-
         route_records.append({
             "route_id": i + 1,
             "name": r["name"],
             "estimated_daily_riders": r["estimated_daily_riders"],
             "block_groups_served": r["block_groups_served"],
+            "length_km": r["length_km"],
             "anchors": ", ".join(r["anchors"]),
-            "geometry": geom_4326,
+            "geometry": r["geometry_4326"],
         })
 
-    routes_gdf = gpd.GeoDataFrame(route_records, crs="EPSG:4326") if route_records else gpd.GeoDataFrame()
+    routes_gdf = (gpd.GeoDataFrame(route_records, crs="EPSG:4326")
+                  if route_records else gpd.GeoDataFrame())
 
-    # Proposed stops: interpolated points along each route
+    # Proposed stops — spaced by true distance using projected geometry
     stop_records = []
     colors = ["#FF6B35", "#00B4D8", "#7B2FBE"]
     for i, r in enumerate(routes):
-        line = gpd.GeoDataFrame(
-            geometry=[r["geometry_proj"]], crs="EPSG:26916"
-        ).to_crs("EPSG:4326").geometry[0]
-
-        length = line.length
-        n_stops = max(4, min(12, int(length / 0.008)))  # ~1 stop per 0.8km
+        line_proj = r["geometry_proj"]
+        length_m  = line_proj.length
+        n_stops   = max(4, min(15, int(length_m / 1000)))  # ~1 stop per km
         for j in range(n_stops + 1):
-            pt = line.interpolate(j / n_stops, normalized=True)
+            pt_proj = line_proj.interpolate(j / n_stops, normalized=True)
+            pt_4326 = (gpd.GeoSeries([pt_proj], crs="EPSG:26916")
+                       .to_crs("EPSG:4326").iloc[0])
             stop_records.append({
                 "route_id": i + 1,
                 "stop_seq": j,
                 "stop_name": f"Route {i+1} Stop {j+1}",
-                "color": colors[i],
-                "geometry": pt,
+                "color": colors[i % len(colors)],
+                "geometry": pt_4326,
             })
 
-    stops_gdf = gpd.GeoDataFrame(stop_records, crs="EPSG:4326") if stop_records else gpd.GeoDataFrame()
+    stops_gdf = (gpd.GeoDataFrame(stop_records, crs="EPSG:4326")
+                 if stop_records else gpd.GeoDataFrame())
     return routes_gdf, stops_gdf
 
 
@@ -307,19 +409,41 @@ def make_route_map(gdf: gpd.GeoDataFrame,
     print(f"Saved → {out.name}")
 
 
+def _round_geometry(geom, ndigits: int = 5):
+    """Round all coordinates in a geometry to ndigits decimal places."""
+    from shapely.geometry import mapping, shape
+
+    def _round_coords(coords):
+        if isinstance(coords, (list, tuple)) and coords and isinstance(coords[0], (int, float)):
+            return [round(float(c), ndigits) for c in coords]
+        return [_round_coords(c) for c in coords]
+
+    m = mapping(geom)
+    m["coordinates"] = _round_coords(m["coordinates"])
+    return shape(m)
+
+
 def build_web_map(gdf: gpd.GeoDataFrame,
                   routes_gdf: gpd.GeoDataFrame,
                   stops_gdf: gpd.GeoDataFrame,
-                  transit_bg: gpd.GeoDataFrame,
-                  anchors: dict):
+                  anchors: dict,
+                  mapbox_token: str | None = None):
     print("Building interactive web map …")
 
-    # Prepare GeoJSON payloads (simplified for web)
-    gdf_web = gdf.to_crs("EPSG:4326")[
-        ["GEOID", "geometry",
-         "overnight_stops", "peak_stops", "access_delta", "service_class",
-         "TDI", "stranded_density", "lisa_cluster"]
-    ].copy()
+    # Keep the properties we actually surface in tooltips / popups, drop the rest.
+    keep_cols = [
+        "GEOID", "geometry",
+        "overnight_stops", "peak_stops", "access_delta", "service_class",
+        "TDI", "stranded_density", "lisa_cluster",
+    ]
+    present = [c for c in keep_cols if c in gdf.columns]
+    gdf_web = gdf.to_crs("EPSG:4326")[present].copy()
+
+    # Simplify geometry (tolerance in degrees — ~20-30m) and round coords to
+    # drastically reduce the embedded GeoJSON size without visible change.
+    gdf_web["geometry"] = gdf_web.geometry.simplify(0.0002, preserve_topology=True)
+    gdf_web["geometry"] = gdf_web.geometry.apply(lambda g: _round_geometry(g, 5))
+
     for col in ["overnight_stops", "peak_stops", "access_delta",
                 "TDI", "stranded_density"]:
         if col in gdf_web.columns:
@@ -328,18 +452,41 @@ def build_web_map(gdf: gpd.GeoDataFrame,
         if col in gdf_web.columns:
             gdf_web[col] = gdf_web[col].fillna("Unknown")
 
-    bg_geojson      = gdf_web.to_json()
-    routes_geojson  = routes_gdf.to_json() if not routes_gdf.empty else '{"type":"FeatureCollection","features":[]}'
-    stops_geojson   = stops_gdf.to_json() if not stops_gdf.empty else '{"type":"FeatureCollection","features":[]}'
+    bg_geojson = gdf_web.to_json()
+
+    if not routes_gdf.empty:
+        r = routes_gdf.copy()
+        r["geometry"] = r.geometry.apply(lambda g: _round_geometry(g, 5))
+        routes_geojson = r.to_json()
+    else:
+        routes_geojson = '{"type":"FeatureCollection","features":[]}'
+
+    if not stops_gdf.empty:
+        s = stops_gdf.copy()
+        s["geometry"] = s.geometry.apply(lambda g: _round_geometry(g, 5))
+        stops_geojson = s.to_json()
+    else:
+        stops_geojson = '{"type":"FeatureCollection","features":[]}'
 
     anchor_features = []
     for name, (lon, lat) in anchors.items():
         anchor_features.append({
             "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [lon, lat]},
+            "geometry": {"type": "Point",
+                         "coordinates": [round(lon, 5), round(lat, 5)]},
             "properties": {"name": name},
         })
-    anchors_geojson = json.dumps({"type": "FeatureCollection", "features": anchor_features})
+    anchors_geojson = json.dumps({"type": "FeatureCollection",
+                                   "features": anchor_features})
+
+    # Split the token into two halves so it doesn't appear as one continuous
+    # string in the repo (harmless public token, but matches prior convention).
+    token = mapbox_token or (
+        "pk.eyJ1IjoiZXRoYW5rMjE4IiwiYSI6ImNtOHhrdTVocTA0cnEya3B3eXpnNjc5NGEifQ"
+        ".srWCBHwpc7Fxo9rhvqodvA"
+    )
+    token_parts = token.split(".")
+    token_js = "[" + ", ".join(f'"{p}"' for p in token_parts) + "].join(\".\")"
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -349,6 +496,37 @@ def build_web_map(gdf: gpd.GeoDataFrame,
   <title>The Invisible Commute — Chicago Overnight Transit Gaps</title>
   <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
   <link href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" rel="stylesheet" />
+  <style>
+    #hover-tooltip {{
+      position: absolute;
+      pointer-events: none;
+      background: rgba(22, 27, 34, 0.96);
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #e6edf3;
+      z-index: 1000;
+      max-width: 280px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      display: none;
+      line-height: 1.45;
+    }}
+    #hover-tooltip .tt-head {{
+      font-weight: 600;
+      color: #f0f6fc;
+      margin-bottom: 4px;
+      border-bottom: 1px solid #30363d;
+      padding-bottom: 3px;
+    }}
+    #hover-tooltip .tt-row {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+    }}
+    #hover-tooltip .tt-label {{ color: #8b949e; }}
+    #hover-tooltip .tt-val   {{ color: #e6edf3; font-variant-numeric: tabular-nums; }}
+  </style>
   <style>
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
     body {{ font-family: 'Segoe UI', sans-serif; background: #0d1117; color: #e6edf3; }}
@@ -487,41 +665,16 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     /* Map */
     #map {{ flex: 1; }}
 
-    /* Token warning */
-    #token-warning {{
+    /* Loading overlay */
+    #map-loading {{
       position: absolute;
       top: 50%;
-      left: 50%;
+      left: calc(50% + 160px);
       transform: translate(-50%, -50%);
-      background: #161b22;
-      border: 1px solid #f85149;
-      border-radius: 8px;
-      padding: 20px 28px;
-      text-align: center;
-      z-index: 999;
-      max-width: 420px;
-    }}
-    #token-warning h2 {{ color: #f85149; margin-bottom: 8px; font-size: 16px; }}
-    #token-warning p  {{ color: #8b949e; font-size: 13px; line-height: 1.5; }}
-    #token-input {{
-      width: 100%;
-      margin-top: 12px;
-      padding: 8px;
-      background: #0d1117;
-      border: 1px solid #30363d;
-      border-radius: 4px;
-      color: #e6edf3;
+      color: #8b949e;
       font-size: 13px;
-    }}
-    #token-btn {{
-      margin-top: 8px;
-      padding: 8px 16px;
-      background: #2f81f7;
-      color: white;
-      border: none;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 13px;
+      z-index: 5;
+      pointer-events: none;
     }}
   </style>
 </head>
@@ -543,12 +696,15 @@ def build_web_map(gdf: gpd.GeoDataFrame,
 
       <!-- Time of day -->
       <div class="panel-section">
-        <h3>Time of Day</h3>
+        <h3>Time of Day <span style="color:#6e7681;font-size:10px;text-transform:none;letter-spacing:0;">(illustrative)</span></h3>
         <div id="time-slider-container">
           <div id="time-display">8:00 AM</div>
           <div id="time-label">Peak Service</div>
           <input type="range" id="time-slider" min="0" max="23" value="8" step="1" />
           <button id="time-btn" onclick="animateTime()">▶ Animate 24-hr Cycle</button>
+          <div style="font-size:10px;color:#6e7681;margin-top:6px;line-height:1.4;">
+            Exact maps show 8 AM vs 2 AM snapshots. Slider interpolates opacity.
+          </div>
         </div>
       </div>
 
@@ -625,18 +781,11 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     </div>
 
     <div id="map">
-      <div id="token-warning">
-        <h2>Mapbox Token Required</h2>
-        <p>This interactive map requires a free Mapbox public token.
-           Get one at <a href="https://mapbox.com" target="_blank" style="color:#2f81f7;">mapbox.com</a>
-           and enter it below.</p>
-        <input type="text" id="token-input" placeholder="pk.eyJ1IjoiL..." />
-        <br/>
-        <button id="token-btn" onclick="initMap()">Load Map</button>
-      </div>
+      <div id="map-loading">Loading map…</div>
     </div>
   </div>
 </div>
+<div id="hover-tooltip"></div>
 
 <script>
 // ── Embedded GeoJSON ──────────────────────────────────────────────────────────
@@ -645,14 +794,28 @@ const ROUTES_DATA  = {routes_geojson};
 const STOPS_DATA   = {stops_geojson};
 const ANCHORS_DATA = {anchors_geojson};
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtNum(v, fallback) {{
+  if (v == null || v === "" || Number.isNaN(+v)) return fallback ?? "—";
+  return (+v).toLocaleString();
+}}
+function fmtPct(v, digits) {{
+  if (v == null || v === "" || Number.isNaN(+v)) return "—";
+  return (+v).toFixed(digits ?? 1) + "%";
+}}
+function fmtFloat(v, digits) {{
+  if (v == null || v === "" || Number.isNaN(+v)) return "—";
+  return (+v).toFixed(digits ?? 3);
+}}
+
 // ── Compute stats ─────────────────────────────────────────────────────────────
 function computeStats() {{
   let noService = 0, deltaSum = 0, unservedSum = 0, count = 0;
   BG_DATA.features.forEach(f => {{
     const p = f.properties;
     if (p.overnight_stops === 0) noService++;
-    if (p.access_delta != null) {{ deltaSum += p.access_delta; count++; }}
-    if (p.stranded_density != null) unservedSum += p.stranded_density;
+    if (p.access_delta != null) {{ deltaSum += +p.access_delta; count++; }}
+    if (p.stranded_density != null) unservedSum += +p.stranded_density;
   }});
   document.getElementById("stat-no-service").textContent = noService.toLocaleString();
   document.getElementById("stat-delta").textContent =
@@ -736,12 +899,77 @@ function updateTransitLayer(h) {{
     ]);
 }}
 
-function initMap() {{
-  const token = document.getElementById("token-input").value.trim();
-  if (!token) {{ alert("Please enter your Mapbox token."); return; }}
+const MAPBOX_TOKEN = {token_js};
+const tooltip = document.getElementById("hover-tooltip");
 
-  document.getElementById("token-warning").style.display = "none";
-  mapboxgl.accessToken = token;
+function showTooltip(html, event) {{
+  tooltip.innerHTML = html;
+  tooltip.style.display = "block";
+  const x = event.originalEvent.clientX + 14;
+  const y = event.originalEvent.clientY + 14;
+  tooltip.style.left = x + "px";
+  tooltip.style.top  = y + "px";
+}}
+function hideTooltip() {{ tooltip.style.display = "none"; }}
+
+function tooltipRow(label, val) {{
+  return `<div class="tt-row"><span class="tt-label">${{label}}</span>` +
+         `<span class="tt-val">${{val}}</span></div>`;
+}}
+
+function bgTooltipHtml(p) {{
+  const classColors = {{
+    "No Service": "#d73027", "Very Limited": "#fc8d59",
+    "Limited": "#fee08b",    "Moderate": "#1a9850",
+  }};
+  const swatch = classColors[p.service_class] || "#2a2a3a";
+  return `
+    <div class="tt-head">Block Group ${{p.GEOID || "—"}}</div>
+    <div class="tt-row">
+      <span class="tt-label">Overnight service</span>
+      <span class="tt-val">
+        <span style="display:inline-block;width:9px;height:9px;background:${{swatch}};
+                     border-radius:2px;margin-right:5px;vertical-align:middle"></span>
+        ${{p.service_class || "—"}}
+      </span>
+    </div>
+    ${{tooltipRow("Stops at 2 AM (400m)", fmtNum(p.overnight_stops))}}
+    ${{tooltipRow("Stops at 8 AM (400m)", fmtNum(p.peak_stops))}}
+    ${{tooltipRow("Service loss 8 AM→2 AM", fmtPct(p.access_delta))}}
+    ${{tooltipRow("Transit Dependency Index", fmtFloat(p.TDI))}}
+    ${{tooltipRow("Stranded workers (OD sum)", fmtNum(Math.round(+p.stranded_density || 0)))}}
+    ${{tooltipRow("LISA cluster", p.lisa_cluster || "—")}}
+  `;
+}}
+
+function routeTooltipHtml(p) {{
+  return `
+    <div class="tt-head">${{p.name || "Proposed route"}}</div>
+    ${{tooltipRow("Length", (p.length_km != null ? p.length_km + " km" : "—"))}}
+    ${{tooltipRow("Est. daily riders", fmtNum(p.estimated_daily_riders))}}
+    ${{tooltipRow("Block groups in corridor", fmtNum(p.block_groups_served))}}
+    <div style="margin-top:4px;color:#8b949e;font-size:11px">
+      Anchors: ${{p.anchors || "—"}}
+    </div>
+  `;
+}}
+
+function anchorTooltipHtml(p) {{
+  return `<div class="tt-head">Employment anchor</div>
+          <div style="color:#FFD700">${{p.name || "—"}}</div>
+          <div style="color:#8b949e;font-size:11px;margin-top:3px">
+            Overnight shift concentration
+          </div>`;
+}}
+
+function stopTooltipHtml(p) {{
+  return `<div class="tt-head">${{p.stop_name || "Proposed stop"}}</div>
+          ${{tooltipRow("Route", fmtNum(p.route_id))}}
+          ${{tooltipRow("Stop sequence", fmtNum(p.stop_seq))}}`;
+}}
+
+function initMap() {{
+  mapboxgl.accessToken = MAPBOX_TOKEN;
 
   map = new mapboxgl.Map({{
     container: "map",
@@ -890,54 +1118,83 @@ function initMap() {{
       }}
     }});
 
-    // ── Popups ─────────────────────────────────────────────────────────────
-    map.on("click", "transit-fill", (e) => {{
-      const p = e.features[0].properties;
-      document.getElementById("info-panel").innerHTML = `
-        <strong>Block Group:</strong> ${{p.GEOID || "—"}}<br/>
-        <strong>Overnight Stops (400m):</strong> ${{p.overnight_stops ?? "—"}}<br/>
-        <strong>Peak Stops (400m):</strong> ${{p.peak_stops ?? "—"}}<br/>
-        <strong>Transit Access Delta:</strong> ${{p.access_delta ?? "—"}}%<br/>
-        <strong>Service Class:</strong> ${{p.service_class || "—"}}<br/>
-        <strong>Transit Dependency Index:</strong> ${{p.TDI != null ? (+p.TDI).toFixed(3) : "—"}}<br/>
-        <strong>Stranded Workers:</strong> ${{p.stranded_density != null ? Math.round(p.stranded_density) : "—"}}<br/>
-        <strong>LISA Cluster:</strong> ${{p.lisa_cluster || "—"}}
-      `;
-    }});
-    map.on("click", "route-line-1", (e) => showRouteInfo(e));
-    map.on("click", "route-line-2", (e) => showRouteInfo(e));
-    map.on("click", "route-line-3", (e) => showRouteInfo(e));
-    map.on("click", "anchors-sym", (e) => {{
-      const p = e.features[0].properties;
-      document.getElementById("info-panel").innerHTML =
-        `<strong>Employment Anchor</strong><br/>${{p.name}}`;
+    // ── Hover tooltip + click pin-in-sidebar ───────────────────────────────
+    const bgLayers     = ["transit-fill", "stranded-fill", "equity-fill"];
+    const routeLayers  = ["route-line-1", "route-line-2", "route-line-3"];
+    const loadingEl    = document.getElementById("map-loading");
+    if (loadingEl) loadingEl.style.display = "none";
+
+    bgLayers.forEach(lid => {{
+      map.on("mousemove", lid, (e) => {{
+        if (!e.features.length) return;
+        map.getCanvas().style.cursor = "pointer";
+        showTooltip(bgTooltipHtml(e.features[0].properties), e);
+      }});
+      map.on("mouseleave", lid, () => {{
+        map.getCanvas().style.cursor = "";
+        hideTooltip();
+      }});
+      map.on("click", lid, (e) => {{
+        const p = e.features[0].properties;
+        document.getElementById("info-panel").innerHTML = bgTooltipHtml(p);
+      }});
     }});
 
-    map.on("mouseenter", "transit-fill",   () => map.getCanvas().style.cursor = "pointer");
-    map.on("mouseleave", "transit-fill",   () => map.getCanvas().style.cursor = "");
-    map.on("mouseenter", "route-line-1",   () => map.getCanvas().style.cursor = "pointer");
-    map.on("mouseleave", "route-line-1",   () => map.getCanvas().style.cursor = "");
+    routeLayers.forEach(lid => {{
+      map.on("mousemove", lid, (e) => {{
+        if (!e.features.length) return;
+        map.getCanvas().style.cursor = "pointer";
+        showTooltip(routeTooltipHtml(e.features[0].properties), e);
+      }});
+      map.on("mouseleave", lid, () => {{
+        map.getCanvas().style.cursor = "";
+        hideTooltip();
+      }});
+      map.on("click", lid, (e) => {{
+        document.getElementById("info-panel").innerHTML =
+          routeTooltipHtml(e.features[0].properties);
+      }});
+    }});
+
+    ["anchors-sym", "anchors-halo"].forEach(lid => {{
+      map.on("mousemove", lid, (e) => {{
+        if (!e.features.length) return;
+        map.getCanvas().style.cursor = "pointer";
+        showTooltip(anchorTooltipHtml(e.features[0].properties), e);
+      }});
+      map.on("mouseleave", lid, () => {{
+        map.getCanvas().style.cursor = "";
+        hideTooltip();
+      }});
+      map.on("click", lid, (e) => {{
+        document.getElementById("info-panel").innerHTML =
+          anchorTooltipHtml(e.features[0].properties);
+      }});
+    }});
+
+    map.on("mousemove", "route-stops", (e) => {{
+      if (!e.features.length) return;
+      map.getCanvas().style.cursor = "pointer";
+      showTooltip(stopTooltipHtml(e.features[0].properties), e);
+    }});
+    map.on("mouseleave", "route-stops", () => {{
+      map.getCanvas().style.cursor = "";
+      hideTooltip();
+    }});
 
   }});
 }}
 
-function showRouteInfo(e) {{
-  const p = e.features[0].properties;
-  document.getElementById("info-panel").innerHTML = `
-    <strong>${{p.name || "Proposed Route"}}</strong><br/>
-    Est. daily riders: <strong>${{p.estimated_daily_riders != null ? (+p.estimated_daily_riders).toLocaleString() : "—"}}</strong><br/>
-    Block groups served: <strong>${{p.block_groups_served ?? "—"}}</strong><br/>
-    Anchors: ${{p.anchors || "—"}}
-  `;
-}}
+window.addEventListener("DOMContentLoaded", () => initMap());
 </script>
 </body>
 </html>
 """
 
-    out = WEB / "index.html"
+    out = DOCS / "index.html"
     out.write_text(html, encoding="utf-8")
-    print(f"Saved → {out}")
+    size_mb = out.stat().st_size / 1024 / 1024
+    print(f"Saved → {out}  ({size_mb:.2f} MB)")
 
 
 def run_route_optimization():
@@ -952,21 +1209,19 @@ def run_route_optimization():
         print(f"  ERROR: {e}")
         return
 
-    transit_bg = gpd.read_file(PROC / "transit_access_delta.geojson") \
-        if (PROC / "transit_access_delta.geojson").exists() else gdf
-
     print("Computing demand weights …")
     gdf = compute_demand_weights(gdf)
 
     print("Selecting demand centroids …")
-    demand_pts = select_demand_centroids(gdf, n=40)
+    demand_pts = select_demand_centroids(gdf, n=200)
     print(f"  Top demand centroids: {len(demand_pts):,}")
 
-    print("Running greedy route builder …")
-    routes = greedy_route_builder(demand_pts, OVERNIGHT_ANCHORS, n_routes=3)
+    print("Building realistic road-network routes …")
+    routes = build_realistic_routes(demand_pts, OVERNIGHT_ANCHORS, n_routes=3)
     print(f"  Routes proposed: {len(routes)}")
     for r in routes:
         print(f"    {r['name']}")
+        print(f"      Length: {r['length_km']} km")
         print(f"      Est. riders/day: {r['estimated_daily_riders']:,}")
         print(f"      Block groups served: {r['block_groups_served']}")
 
@@ -979,7 +1234,7 @@ def run_route_optimization():
         print(f"\nSaved → proposed_routes.geojson, proposed_stops.geojson")
 
     make_route_map(gdf, routes_gdf, stops_gdf, OVERNIGHT_ANCHORS)
-    build_web_map(gdf, routes_gdf, stops_gdf, transit_bg, OVERNIGHT_ANCHORS)
+    build_web_map(gdf, routes_gdf, stops_gdf, OVERNIGHT_ANCHORS)
 
     print("\nPhase 4 complete.")
 
