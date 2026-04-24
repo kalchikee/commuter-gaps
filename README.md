@@ -52,7 +52,7 @@ This project builds a **time-dependent transit accessibility model** for Chicago
 
 ### Phase 4 — Route Optimization and Visualization
 - Location-allocation model (maximize coverage) using Stranded Worker Density as demand weights
-- Propose 5 new late-night routes connecting high-demand clusters to overnight employment centers (medical district, O'Hare, Midway/logistics, west side hospitals, south suburban Amazon)
+- Propose 5 new late-night **bus** routes (not rail) connecting high-demand clusters to overnight employment centers (medical district, O'Hare, Midway/logistics, west side hospitals, south suburban Amazon). Bus was chosen because rail capital would be 100–500× the cost ($100M–$200M/mile for light rail vs ~$650k/bus) and CTA already runs overnight "Night Owl" bus service that these routes would extend.
 - **Interactive Mapbox GL JS web map** with 8 AM vs 2 AM toggle, flow lines, equity hot spots, proposed routes
 
 ## Technical Stack

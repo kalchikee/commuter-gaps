@@ -880,7 +880,7 @@ def build_web_map(gdf: gpd.GeoDataFrame,
         </div>
         <div class="layer-toggle">
           <input type="checkbox" id="toggle-routes" checked onchange="toggleRouteLayer(this)"/>
-          <label for="toggle-routes">Proposed Night Owl Routes</label>
+          <label for="toggle-routes">Proposed Night Owl Bus Routes</label>
         </div>
         <div class="layer-toggle">
           <input type="checkbox" id="toggle-anchors" checked onchange="toggleLayer('anchors-sym', this)"/>
@@ -924,12 +924,17 @@ def build_web_map(gdf: gpd.GeoDataFrame,
 
       <!-- Per-route cost table -->
       <div class="panel-section">
-        <h3>Proposed Routes (2026 cost)</h3>
+        <h3>Proposed Bus Routes (2026 cost)</h3>
+        <div style="font-size:10px;color:#8b949e;margin:-4px 0 8px;line-height:1.4;">
+          All five are proposed <strong>bus</strong> lines (not rail). Rail capital would be
+          100–500× higher per mile. These routes extend CTA's existing overnight
+          "Night Owl" bus service.
+        </div>
         <div id="route-cost-list" style="font-size:11px; color:#c9d1d9;">
           <!-- filled by JS renderRouteCosts() -->
         </div>
         <div style="font-size:10px; color:#6e7681; margin-top:8px; line-height:1.4;">
-          60-min overnight headway · 6 h/night · CNG coaches · $200/RVH.
+          60-min overnight headway · 6 h/night · 40-ft CNG coaches · $200/RVH.
           Click or hover a route on the map for detail.
         </div>
       </div>
@@ -1164,7 +1169,7 @@ function renderLegend() {{
   const routesOn = ROUTE_DEFS.filter(r => isLayerVisible(`route-line-${{r.id}}`));
   if (routesOn.length > 0) {{
     const rows = routesOn.map(r => legendRow(lineSwatch(r.color), r.label)).join("");
-    sections.push(legendSection("Proposed Night Owl Routes", rows));
+    sections.push(legendSection("Proposed Night Owl Bus Routes", rows));
   }}
 
   // Anchors
