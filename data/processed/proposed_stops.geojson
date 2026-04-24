@@ -66,6 +66,22 @@
 { "type": "Feature", "properties": { "route_id": 4, "stop_seq": 12, "stop_name": "Route 4 Stop 13", "color": "#F7B538" }, "geometry": { "type": "Point", "coordinates": [ -87.649381706611251, 41.903623850383092 ] } },
 { "type": "Feature", "properties": { "route_id": 4, "stop_seq": 13, "stop_name": "Route 4 Stop 14", "color": "#F7B538" }, "geometry": { "type": "Point", "coordinates": [ -87.648984115494059, 41.931873430005034 ] } },
 { "type": "Feature", "properties": { "route_id": 4, "stop_seq": 14, "stop_name": "Route 4 Stop 15", "color": "#F7B538" }, "geometry": { "type": "Point", "coordinates": [ -87.635653187497866, 41.917714483013121 ] } },
-{ "type": "Feature", "properties": { "route_id": 4, "stop_seq": 15, "stop_name": "Route 4 Stop 16", "color": "#F7B538" }, "geometry": { "type": "Point", "coordinates": [ -87.620354, 41.895807599999983 ] } }
+{ "type": "Feature", "properties": { "route_id": 4, "stop_seq": 15, "stop_name": "Route 4 Stop 16", "color": "#F7B538" }, "geometry": { "type": "Point", "coordinates": [ -87.620354, 41.895807599999983 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 0, "stop_name": "Route 5 Stop 1", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.5963623, 41.7872257 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 1, "stop_name": "Route 5 Stop 2", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.615661279459175, 41.781646881552042 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 2, "stop_name": "Route 5 Stop 3", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.630434811198327, 41.772707335678504 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 3, "stop_name": "Route 5 Stop 4", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.65425173515959, 41.770370714625038 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 4, "stop_name": "Route 5 Stop 5", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.646549982850019, 41.756068077355202 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 5, "stop_name": "Route 5 Stop 6", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.643979758951644, 41.748654180992858 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 6, "stop_name": "Route 5 Stop 7", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.65333663636487, 41.735944814972122 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 7, "stop_name": "Route 5 Stop 8", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.643328527168563, 41.7234674906069 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 8, "stop_name": "Route 5 Stop 9", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.642797457265004, 41.703816206955196 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 9, "stop_name": "Route 5 Stop 10", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.642169901025767, 41.683978722889378 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 10, "stop_name": "Route 5 Stop 11", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.641511953366162, 41.664141721081641 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 11, "stop_name": "Route 5 Stop 12", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.641583397680122, 41.644314986627755 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 12, "stop_name": "Route 5 Stop 13", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.641415144911704, 41.624472137145361 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 13, "stop_name": "Route 5 Stop 14", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.64650137464308, 41.605167100709544 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 14, "stop_name": "Route 5 Stop 15", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.668607949356172, 41.600837069595784 ] } },
+{ "type": "Feature", "properties": { "route_id": 5, "stop_seq": 15, "stop_name": "Route 5 Stop 16", "color": "#34C38F" }, "geometry": { "type": "Point", "coordinates": [ -87.6944918, 41.600706 ] } }
 ]
 }

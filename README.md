@@ -52,7 +52,7 @@ This project builds a **time-dependent transit accessibility model** for Chicago
 
 ### Phase 4 — Route Optimization and Visualization
 - Location-allocation model (maximize coverage) using Stranded Worker Density as demand weights
-- Propose 4 new late-night routes connecting high-demand clusters to overnight employment centers (medical district, O'Hare, Midway/logistics, west side hospitals)
+- Propose 5 new late-night routes connecting high-demand clusters to overnight employment centers (medical district, O'Hare, Midway/logistics, west side hospitals, south suburban Amazon)
 - **Interactive Mapbox GL JS web map** with 8 AM vs 2 AM toggle, flow lines, equity hot spots, proposed routes
 
 ## Technical Stack
@@ -102,6 +102,7 @@ commuter-gaps/
 | Proposed Route 2 — Midway / Logistics Express (16.7 km) | ~130 est. riders/day |
 | Proposed Route 3 — West Side Hospital Link (23.3 km) | ~504 est. riders/day |
 | Proposed Route 4 — O'Hare Express (48.6 km) | ~473 est. riders/day |
+| Proposed Route 5 — South Suburban Amazon Link (33.1 km) | ~961 est. riders/day |
 
 Shift-work trip counts are weighted by each destination block's share of jobs in Healthcare (NAICS 62), Accommodation/Food Services (NAICS 72), and Transportation/Warehousing (NAICS 48-49) — the sectors most dependent on overnight workers.
 

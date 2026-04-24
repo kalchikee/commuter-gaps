@@ -208,7 +208,7 @@ def route_on_roads(G, waypoints_lonlat):
 
 def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
                            anchors: dict,
-                           n_routes: int = 4) -> list:
+                           n_routes: int = 5) -> list:
     """
     Build 3 realistic late-night bus routes:
       - Each has a start anchor, an end anchor, and intermediate high-demand stops
@@ -247,6 +247,12 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
             "start": "O'Hare International Airport",
             "end":   "Northwestern Memorial Hospital",
             "max_intermediate": 7,
+        },
+        {
+            "name": "Night Owl 5 — South Suburban Amazon Link",
+            "start": "University of Chicago Medicine",
+            "end":   "Amazon MDW6 (Markham)",
+            "max_intermediate": 6,
         },
     ]
 
@@ -315,7 +321,7 @@ def build_route_geodataframes(routes: list) -> tuple:
 
     # Proposed stops — spaced by true distance using projected geometry
     stop_records = []
-    colors = ["#FF6B35", "#00B4D8", "#7B2FBE", "#F7B538"]
+    colors = ["#FF6B35", "#00B4D8", "#7B2FBE", "#F7B538", "#34C38F"]
     for i, r in enumerate(routes):
         line_proj = r["geometry_proj"]
         length_m  = line_proj.length
@@ -359,7 +365,7 @@ def make_route_map(gdf: gpd.GeoDataFrame,
                                "orientation": "horizontal", "pad": 0.02, "shrink": 0.6})
 
     # Routes
-    route_colors = ["#FF6B35", "#00B4D8", "#7B2FBE", "#F7B538"]
+    route_colors = ["#FF6B35", "#00B4D8", "#7B2FBE", "#F7B538", "#34C38F"]
     if not routes_gdf.empty:
         for i, (_, row) in enumerate(routes_gdf.iterrows()):
             gpd.GeoDataFrame([row], crs="EPSG:4326").plot(
@@ -386,6 +392,7 @@ def make_route_map(gdf: gpd.GeoDataFrame,
         mpatches.Patch(color="#00B4D8", label="Route 2 — Midway / Logistics"),
         mpatches.Patch(color="#7B2FBE", label="Route 3 — West Side Hospital"),
         mpatches.Patch(color="#F7B538", label="Route 4 — O'Hare Express"),
+        mpatches.Patch(color="#34C38F", label="Route 5 — South Suburban Amazon"),
         plt.Line2D([0], [0], marker="*", color="#FFD700", linestyle="None",
                    markersize=10, label="Employment Anchor"),
     ]
@@ -956,6 +963,7 @@ const ROUTE_DEFS = [
   {{ id: 2, color: "#00B4D8", label: "Route 2 — Midway / Logistics" }},
   {{ id: 3, color: "#7B2FBE", label: "Route 3 — West Side Hospital" }},
   {{ id: 4, color: "#F7B538", label: "Route 4 — O'Hare Express" }},
+  {{ id: 5, color: "#34C38F", label: "Route 5 — South Suburban Amazon" }},
 ];
 const ROUTE_LINE_IDS = ROUTE_DEFS.map(r => `route-line-${{r.id}}`);
 
@@ -1362,7 +1370,7 @@ def run_route_optimization():
     print(f"  Top demand centroids: {len(demand_pts):,}")
 
     print("Building realistic road-network routes …")
-    routes = build_realistic_routes(demand_pts, OVERNIGHT_ANCHORS, n_routes=4)
+    routes = build_realistic_routes(demand_pts, OVERNIGHT_ANCHORS, n_routes=5)
     print(f"  Routes proposed: {len(routes)}")
     for r in routes:
         print(f"    {r['name']}")
