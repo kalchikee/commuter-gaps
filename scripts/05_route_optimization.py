@@ -208,7 +208,7 @@ def route_on_roads(G, waypoints_lonlat):
 
 def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
                            anchors: dict,
-                           n_routes: int = 3) -> list:
+                           n_routes: int = 4) -> list:
     """
     Build 3 realistic late-night bus routes:
       - Each has a start anchor, an end anchor, and intermediate high-demand stops
@@ -241,6 +241,12 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
             "start": "Northwestern Memorial Hospital",
             "end":   "Stroger Hospital (Cook County)",
             "max_intermediate": 5,
+        },
+        {
+            "name": "Night Owl 4 — O'Hare Express",
+            "start": "O'Hare International Airport",
+            "end":   "Northwestern Memorial Hospital",
+            "max_intermediate": 7,
         },
     ]
 
@@ -309,7 +315,7 @@ def build_route_geodataframes(routes: list) -> tuple:
 
     # Proposed stops — spaced by true distance using projected geometry
     stop_records = []
-    colors = ["#FF6B35", "#00B4D8", "#7B2FBE"]
+    colors = ["#FF6B35", "#00B4D8", "#7B2FBE", "#F7B538"]
     for i, r in enumerate(routes):
         line_proj = r["geometry_proj"]
         length_m  = line_proj.length
@@ -353,12 +359,11 @@ def make_route_map(gdf: gpd.GeoDataFrame,
                                "orientation": "horizontal", "pad": 0.02, "shrink": 0.6})
 
     # Routes
-    route_colors = ["#FF6B35", "#00B4D8", "#7B2FBE"]
-    route_widths = [3.5, 3.5, 3.5]
+    route_colors = ["#FF6B35", "#00B4D8", "#7B2FBE", "#F7B538"]
     if not routes_gdf.empty:
         for i, (_, row) in enumerate(routes_gdf.iterrows()):
             gpd.GeoDataFrame([row], crs="EPSG:4326").plot(
-                ax=ax, color=route_colors[i % 3], linewidth=route_widths[i % 3],
+                ax=ax, color=route_colors[i % len(route_colors)], linewidth=3.5,
                 zorder=5,
             )
 
@@ -378,14 +383,13 @@ def make_route_map(gdf: gpd.GeoDataFrame,
     # Legend
     legend_elements = [
         mpatches.Patch(color="#FF6B35", label="Route 1 — South Side Medical"),
-        mpatches.Patch(color="#00B4D8", label="Route 2 — Airport / Logistics"),
+        mpatches.Patch(color="#00B4D8", label="Route 2 — Midway / Logistics"),
         mpatches.Patch(color="#7B2FBE", label="Route 3 — West Side Hospital"),
-        plt.scatter([], [], c="#FFD700", s=60, marker="*", label="Employment Anchor"),
-    ]
-    ax.legend(handles=legend_elements[:3] + [
+        mpatches.Patch(color="#F7B538", label="Route 4 — O'Hare Express"),
         plt.Line2D([0], [0], marker="*", color="#FFD700", linestyle="None",
-                   markersize=10, label="Employment Anchor")
-    ], loc="lower left", facecolor="#1e2530",
+                   markersize=10, label="Employment Anchor"),
+    ]
+    ax.legend(handles=legend_elements, loc="lower left", facecolor="#1e2530",
               edgecolor="#555555", labelcolor="white", fontsize=8)
 
     if not routes_gdf.empty:
@@ -526,6 +530,72 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     }}
     #hover-tooltip .tt-label {{ color: #8b949e; }}
     #hover-tooltip .tt-val   {{ color: #e6edf3; font-variant-numeric: tabular-nums; }}
+
+    /* On-map legend — floats above the map, bottom-left */
+    #map-legend {{
+      position: absolute;
+      bottom: 28px;
+      left: 340px;
+      background: rgba(22, 27, 34, 0.94);
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      color: #e6edf3;
+      z-index: 50;
+      max-width: 260px;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+      line-height: 1.5;
+      pointer-events: none;
+    }}
+    #map-legend .lg-section {{ margin-bottom: 8px; }}
+    #map-legend .lg-section:last-child {{ margin-bottom: 0; }}
+    #map-legend .lg-title {{
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: #8b949e;
+      margin-bottom: 4px;
+    }}
+    #map-legend .lg-row {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 2px;
+    }}
+    #map-legend .lg-swatch {{
+      width: 14px;
+      height: 14px;
+      border-radius: 2px;
+      flex-shrink: 0;
+      border: 1px solid rgba(255,255,255,0.1);
+    }}
+    #map-legend .lg-line {{
+      width: 22px;
+      height: 4px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }}
+    #map-legend .lg-star {{
+      color: #FFD700;
+      font-size: 15px;
+      width: 14px;
+      text-align: center;
+      flex-shrink: 0;
+    }}
+    #map-legend .lg-gradient {{
+      width: 150px;
+      height: 10px;
+      border-radius: 2px;
+      margin: 2px 0 4px;
+    }}
+    #map-legend .lg-scale {{
+      display: flex;
+      justify-content: space-between;
+      font-size: 10px;
+      color: #8b949e;
+    }}
   </style>
   <style>
     * {{ margin: 0; padding: 0; box-sizing: border-box; }}
@@ -733,22 +803,9 @@ def build_web_map(gdf: gpd.GeoDataFrame,
         </div>
       </div>
 
-      <!-- Legend -->
-      <div class="panel-section">
-        <h3>Legend</h3>
-        <div style="font-size:11px; color:#8b949e; margin-bottom:6px;">Transit Access Delta</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#1a9850"></div> Moderate overnight service</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#fee08b"></div> Limited service</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#fc8d59"></div> Very limited</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#d73027"></div> No overnight service</div>
-        <div style="margin-top:10px; font-size:11px; color:#8b949e; margin-bottom:6px;">Proposed Routes</div>
-        <div class="legend-item"><div class="legend-line" style="background:#FF6B35"></div> Route 1 — South Side Medical</div>
-        <div class="legend-item"><div class="legend-line" style="background:#00B4D8"></div> Route 2 — Airport / Logistics</div>
-        <div class="legend-item"><div class="legend-line" style="background:#7B2FBE"></div> Route 3 — West Side Hospital</div>
-        <div style="margin-top:10px; font-size:11px; color:#8b949e; margin-bottom:6px;">LISA Clusters</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#d73027; opacity:0.7"></div> HH — High Need + Poor Service</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#fc8d59; opacity:0.7"></div> HL — High Need + OK Service</div>
-        <div class="legend-item"><div class="legend-swatch" style="background:#91bfdb; opacity:0.7"></div> LH — Low Need + Poor Service</div>
+      <!-- Legend moved on-map (bottom-left); updates live as you toggle layers -->
+      <div class="panel-section" style="font-size:11px;color:#6e7681;">
+        <em>Legend appears on the map (bottom-left) and updates as you toggle layers.</em>
       </div>
 
       <!-- Stats -->
@@ -782,6 +839,7 @@ def build_web_map(gdf: gpd.GeoDataFrame,
 
     <div id="map">
       <div id="map-loading">Loading map…</div>
+      <div id="map-legend"></div>
     </div>
   </div>
 </div>
@@ -880,12 +938,98 @@ let map = null;
 function toggleLayer(layerId, cb) {{
   if (!map) return;
   map.setLayoutProperty(layerId, 'visibility', cb.checked ? 'visible' : 'none');
+  renderLegend();
 }}
 function toggleRouteLayer(cb) {{
   if (!map) return;
-  ['route-line-1','route-line-2','route-line-3','route-stops'].forEach(id => {{
+  ROUTE_LINE_IDS.concat(['route-stops']).forEach(id => {{
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
   }});
+  renderLegend();
+}}
+
+// ── Dynamic on-map legend ─────────────────────────────────────────────────────
+// Reflects whichever layers are currently visible — updates each time the
+// user toggles a checkbox in the sidebar.
+const ROUTE_DEFS = [
+  {{ id: 1, color: "#FF6B35", label: "Route 1 — South Side Medical" }},
+  {{ id: 2, color: "#00B4D8", label: "Route 2 — Midway / Logistics" }},
+  {{ id: 3, color: "#7B2FBE", label: "Route 3 — West Side Hospital" }},
+  {{ id: 4, color: "#F7B538", label: "Route 4 — O'Hare Express" }},
+];
+const ROUTE_LINE_IDS = ROUTE_DEFS.map(r => `route-line-${{r.id}}`);
+
+function isChecked(id)     {{ const el = document.getElementById(id); return !!(el && el.checked); }}
+function isLayerVisible(id) {{
+  if (!map || !map.getLayer(id)) return false;
+  return map.getLayoutProperty(id, 'visibility') !== 'none';
+}}
+
+function legendSection(title, rowsHtml) {{
+  return `<div class="lg-section"><div class="lg-title">${{title}}</div>${{rowsHtml}}</div>`;
+}}
+function legendRow(swatchHtml, label) {{
+  return `<div class="lg-row">${{swatchHtml}}<span>${{label}}</span></div>`;
+}}
+function swatch(color, alpha) {{
+  return `<div class="lg-swatch" style="background:${{color}};opacity:${{alpha ?? 1}}"></div>`;
+}}
+function lineSwatch(color) {{
+  return `<div class="lg-line" style="background:${{color}}"></div>`;
+}}
+
+function renderLegend() {{
+  const el = document.getElementById("map-legend");
+  if (!el || !map) return;
+
+  const sections = [];
+
+  // Base layer section — whichever fill layer is currently visible
+  if (isLayerVisible("transit-fill")) {{
+    sections.push(legendSection("Overnight Transit Coverage",
+      legendRow(swatch("#1a9850"), "Moderate (8+ stops ≤400m)") +
+      legendRow(swatch("#fee08b"), "Limited (3–7 stops)") +
+      legendRow(swatch("#fc8d59"), "Very limited (1–2 stops)") +
+      legendRow(swatch("#d73027"), "No overnight service")
+    ));
+  }} else if (isLayerVisible("stranded-fill")) {{
+    const grad = "linear-gradient(to right,#0d1117,#3b1578,#7b2fbe,#c77dff,#ff9ef7)";
+    sections.push(legendSection("Stranded Shift Workers",
+      `<div class="lg-gradient" style="background:${{grad}}"></div>` +
+      `<div class="lg-scale"><span>0</span><span>50</span><span>500+</span></div>` +
+      `<div style="font-size:10px;color:#8b949e;margin-top:3px">` +
+      `Sum of unserved shift-work OD trips touching each block group.</div>`
+    ));
+  }} else if (isLayerVisible("equity-fill")) {{
+    sections.push(legendSection("LISA Bivariate Clusters (TDI × Service Loss)",
+      legendRow(swatch("#d73027", 0.8), "HH — High Need + Poor Service") +
+      legendRow(swatch("#fc8d59", 0.8), "HL — High Need + OK Service") +
+      legendRow(swatch("#91bfdb", 0.8), "LH — Low Need + Poor Service") +
+      legendRow(swatch("#4575b4", 0.8), "LL — Low Need + OK Service")
+    ));
+  }}
+
+  // Routes section — one entry per route actually rendered on the map
+  const routesOn = ROUTE_DEFS.filter(r => isLayerVisible(`route-line-${{r.id}}`));
+  if (routesOn.length > 0) {{
+    const rows = routesOn.map(r => legendRow(lineSwatch(r.color), r.label)).join("");
+    sections.push(legendSection("Proposed Night Owl Routes", rows));
+  }}
+
+  // Anchors
+  if (isLayerVisible("anchors-sym")) {{
+    sections.push(legendSection("Employment Anchors",
+      legendRow('<span class="lg-star">★</span>',
+                "Major overnight employer (hospital, airport, logistics)")
+    ));
+  }}
+
+  if (sections.length === 0) {{
+    el.style.display = "none";
+    return;
+  }}
+  el.style.display = "block";
+  el.innerHTML = sections.join("");
 }}
 
 function updateTransitLayer(h) {{
@@ -1056,20 +1200,19 @@ function initMap() {{
 
     // ── Proposed routes ────────────────────────────────────────────────────
     map.addSource("routes", {{ type: "geojson", data: ROUTES_DATA }});
-    const routeColors = ["#FF6B35", "#00B4D8", "#7B2FBE"];
-    for (let i = 1; i <= 3; i++) {{
+    ROUTE_DEFS.forEach(r => {{
       map.addLayer({{
-        id: `route-line-${{i}}`,
+        id: `route-line-${{r.id}}`,
         type: "line",
         source: "routes",
-        filter: ["==", ["get","route_id"], i],
+        filter: ["==", ["get","route_id"], r.id],
         paint: {{
-          "line-color": routeColors[i-1],
+          "line-color": r.color,
           "line-width": 4,
           "line-opacity": 0.9,
         }}
       }});
-    }}
+    }});
 
     // Proposed stops
     map.addSource("stops", {{ type: "geojson", data: STOPS_DATA }});
@@ -1120,9 +1263,11 @@ function initMap() {{
 
     // ── Hover tooltip + click pin-in-sidebar ───────────────────────────────
     const bgLayers     = ["transit-fill", "stranded-fill", "equity-fill"];
-    const routeLayers  = ["route-line-1", "route-line-2", "route-line-3"];
+    const routeLayers  = ROUTE_LINE_IDS;
     const loadingEl    = document.getElementById("map-loading");
     if (loadingEl) loadingEl.style.display = "none";
+
+    renderLegend();
 
     bgLayers.forEach(lid => {{
       map.on("mousemove", lid, (e) => {{
@@ -1217,7 +1362,7 @@ def run_route_optimization():
     print(f"  Top demand centroids: {len(demand_pts):,}")
 
     print("Building realistic road-network routes …")
-    routes = build_realistic_routes(demand_pts, OVERNIGHT_ANCHORS, n_routes=3)
+    routes = build_realistic_routes(demand_pts, OVERNIGHT_ANCHORS, n_routes=4)
     print(f"  Routes proposed: {len(routes)}")
     for r in routes:
         print(f"    {r['name']}")
