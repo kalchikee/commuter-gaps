@@ -39,6 +39,47 @@ MAPS = ROOT / "outputs" / "maps"
 DOCS = ROOT / "docs"
 DOCS.mkdir(parents=True, exist_ok=True)
 
+# ── Cost model (2026 USD) ─────────────────────────────────────────────────────
+# Sources: CTA 2023 NTD operating-cost reports inflated ~3% annually; FTA / APTA
+# new-bus pricing for 40-ft CNG coaches; typical bus-stop construction costs
+# (shelter, sign, concrete pad, ADA compliance) from CTA planning documents.
+COST_2026 = {
+    "op_cost_per_vrh":    200,       # CTA bus operating cost per revenue vehicle hour
+    "new_bus_capital":    650_000,   # 40-ft CNG coach; battery-electric ~$950k
+    "stop_infrastructure": 15_000,   # per new stop (shelter + sign + ADA pad)
+    "service_hours_per_night": 6,    # midnight to ~5 AM "night owl" window
+    "headway_minutes":    60,        # 60-min headway, realistic for overnight
+    "avg_bus_speed_kmh":  30,        # Chicago arterials, no traffic overnight
+    "days_per_year":      365,
+}
+
+
+def estimate_route_cost(length_km: float, n_stops: int,
+                        cost: dict = COST_2026) -> dict:
+    """Estimate 2026 cost of operating a new overnight bus route."""
+    import math
+    round_trip_min = (length_km * 2 / cost["avg_bus_speed_kmh"]) * 60
+    n_buses = max(1, math.ceil(round_trip_min / cost["headway_minutes"]))
+
+    annual_rvh = n_buses * cost["service_hours_per_night"] * cost["days_per_year"]
+    annual_operating = annual_rvh * cost["op_cost_per_vrh"]
+
+    fleet_capital = n_buses * cost["new_bus_capital"]
+    stop_capital  = n_stops * cost["stop_infrastructure"]
+    total_capital = fleet_capital + stop_capital
+
+    return {
+        "n_buses":           n_buses,
+        "round_trip_min":    round(round_trip_min, 1),
+        "annual_rvh":        annual_rvh,
+        "annual_operating":  int(annual_operating),
+        "fleet_capital":     int(fleet_capital),
+        "stop_capital":      int(stop_capital),
+        "total_capital":     int(total_capital),
+        "year_one_total":    int(total_capital + annual_operating),
+    }
+
+
 # Known overnight employment anchors in Chicago (lon, lat)
 OVERNIGHT_ANCHORS = {
     "Rush University Medical Center": (-87.6713, 41.8738),
@@ -304,6 +345,12 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
         estimated_riders = int(covered["demand_weight"].sum() * 150)
         coverage_bgs = len(covered)
 
+        length_km = round(line_proj.length / 1000, 2)
+        # Rough stop count uses the same ~1 stop / km rule applied in
+        # build_route_geodataframes (we'll recompute an exact count there).
+        approx_stops = max(4, min(15, int(line_proj.length / 1000)))
+        cost = estimate_route_cost(length_km, approx_stops)
+
         routes.append({
             "name": spec["name"],
             "geometry_4326": line_4326,
@@ -313,7 +360,11 @@ def build_realistic_routes(demand_pts: gpd.GeoDataFrame,
             "start_anchor": spec["start"],
             "end_anchor":   spec["end"],
             "anchors": [spec["start"], spec["end"]],
-            "length_km": round(line_proj.length / 1000, 2),
+            "length_km": length_km,
+            "n_buses":           cost["n_buses"],
+            "annual_operating":  cost["annual_operating"],
+            "total_capital":     cost["total_capital"],
+            "year_one_total":    cost["year_one_total"],
         })
 
         # Avoid double-crediting BGs to the next route
@@ -335,6 +386,10 @@ def build_route_geodataframes(routes: list) -> tuple:
             "estimated_daily_riders": r["estimated_daily_riders"],
             "block_groups_served": r["block_groups_served"],
             "length_km": r["length_km"],
+            "n_buses":          r["n_buses"],
+            "annual_operating": r["annual_operating"],
+            "total_capital":    r["total_capital"],
+            "year_one_total":   r["year_one_total"],
             "anchors": ", ".join(r["anchors"]),
             "geometry": r["geometry_4326"],
         })
@@ -1120,12 +1175,24 @@ function bgTooltipHtml(p) {{
   `;
 }}
 
+function fmtUSD(v) {{
+  if (v == null || Number.isNaN(+v)) return "—";
+  const n = +v;
+  if (n >= 1e6) return "$" + (n / 1e6).toFixed(2) + "M";
+  if (n >= 1e3) return "$" + (n / 1e3).toFixed(0) + "k";
+  return "$" + n.toLocaleString();
+}}
+
 function routeTooltipHtml(p) {{
   return `
     <div class="tt-head">${{p.name || "Proposed route"}}</div>
     ${{tooltipRow("Length", (p.length_km != null ? p.length_km + " km" : "—"))}}
     ${{tooltipRow("Est. daily riders", fmtNum(p.estimated_daily_riders))}}
     ${{tooltipRow("Block groups in corridor", fmtNum(p.block_groups_served))}}
+    ${{tooltipRow("Fleet (60-min headway)", fmtNum(p.n_buses) + " bus" + (p.n_buses == 1 ? "" : "es"))}}
+    ${{tooltipRow("Annual operating (2026)", fmtUSD(p.annual_operating))}}
+    ${{tooltipRow("Capital (buses + stops)", fmtUSD(p.total_capital))}}
+    ${{tooltipRow("Year-one total", fmtUSD(p.year_one_total))}}
     <div style="margin-top:4px;color:#8b949e;font-size:11px">
       Anchors: ${{p.anchors || "—"}}
     </div>
@@ -1400,9 +1467,21 @@ def run_route_optimization():
     print(f"  Routes proposed: {len(routes)}")
     for r in routes:
         print(f"    {r['name']}")
-        print(f"      Length: {r['length_km']} km")
+        print(f"      Length: {r['length_km']} km ({r['n_buses']} buses, "
+              f"60-min headway, 6h/night)")
         print(f"      Est. riders/day: {r['estimated_daily_riders']:,}")
         print(f"      Block groups served: {r['block_groups_served']}")
+        print(f"      2026 cost: ${r['annual_operating']/1e6:.2f}M/yr operating "
+              f"+ ${r['total_capital']/1e6:.2f}M capital "
+              f"(year-1 ${r['year_one_total']/1e6:.2f}M)")
+
+    tot_ops = sum(r["annual_operating"] for r in routes)
+    tot_cap = sum(r["total_capital"] for r in routes)
+    tot_buses = sum(r["n_buses"] for r in routes)
+    print(f"\n  SYSTEM TOTAL (5 routes, {tot_buses} buses):")
+    print(f"    Steady-state operating:  ${tot_ops/1e6:.2f}M/year")
+    print(f"    Capital (fleet + stops): ${tot_cap/1e6:.2f}M one-time")
+    print(f"    Year-one total:          ${(tot_ops + tot_cap)/1e6:.2f}M")
 
     routes_gdf, stops_gdf = build_route_geodataframes(routes)
 

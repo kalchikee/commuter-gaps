@@ -106,6 +106,21 @@ commuter-gaps/
 
 Route corridors are non-overlapping: each route's polyline is drawn on the road network and later routes exclude demand within 600 m of earlier routes, so ridership estimates aren't double-counted. Route 2's low number reflects only intermediate residential demand — most Midway/UPS riders would board at the anchors themselves, which aren't in this count.
 
+### Estimated cost to build in 2026 (USD)
+
+Assumes 60-minute overnight headway, 6-hour nightly service window (midnight–5 AM), 30 km/h arterial speed, 40-ft CNG coaches, and CTA 2023 NTD operating-cost per revenue vehicle hour inflated to 2026 (~$200/RVH).
+
+| Route | Fleet | Annual operating | Capital (buses + stops) | Year-1 total |
+|---|---|---|---|---|
+| 1 — South Side Medical | 2 buses | $0.88M / yr | $1.52M | **$2.40M** |
+| 2 — Midway / Logistics | 1 bus | $0.44M / yr | $0.86M | **$1.30M** |
+| 3 — West Side Hospital | 1 bus | $0.44M / yr | $0.83M | **$1.27M** |
+| 4 — O'Hare Express | 3 buses | $1.31M / yr | $2.17M | **$3.49M** |
+| 5 — South Suburban Amazon | 3 buses | $1.31M / yr | $2.17M | **$3.49M** |
+| **System total** | **10 buses** | **$4.38M / yr** | **$7.57M** | **~$11.95M** |
+
+Battery-electric coaches (~$950k each) would raise capital by ~$3M; higher-frequency service (30-min headway instead of 60) roughly doubles fleet and operating cost.
+
 Shift-work trip counts are weighted by each destination block's share of jobs in Healthcare (NAICS 62), Accommodation/Food Services (NAICS 72), and Transportation/Warehousing (NAICS 48-49) — the sectors most dependent on overnight workers.
 
 ## Deliverables
