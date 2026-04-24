@@ -219,31 +219,50 @@ _ROAD_GRAPH_CACHE = None
 
 
 def load_road_network():
-    """Load major Chicago/Cook arterial road network. Cached to disk on first call."""
+    """Load full Cook County drivable road network. Cached to disk on first call.
+
+    Uses network_type='drive' (not just major arterials) so every cross-street
+    intersection becomes a graph node. This matters because OSMnx's
+    graph-simplification step merges consecutive nodes of degree two into single
+    edges: if only major roads are in the graph, one "edge" can span 300–500 m
+    between arterial intersections, and the resulting polyline draws a long
+    straight line that visually cuts through blocks along a straight stretch of
+    a Chicago arterial. With the full drive network, those edges break at every
+    ~200 m Chicago cross-street instead.
+    """
     global _ROAD_GRAPH_CACHE
     if _ROAD_GRAPH_CACHE is not None:
         return _ROAD_GRAPH_CACHE
 
     cache_dir = RAW / "osm"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / "cook_major_roads.graphml"
+    cache_path = cache_dir / "cook_drive_network.graphml"
 
     if cache_path.exists():
-        print("  Loading cached road network …")
+        print("  Loading cached drive-network graph …")
         G = ox.load_graphml(cache_path)
     else:
-        print("  Downloading major road network (primary/secondary/tertiary) …")
-        custom_filter = (
-            '["highway"~"motorway|trunk|primary|secondary|tertiary|'
-            'motorway_link|trunk_link|primary_link|secondary_link|tertiary_link"]'
-        )
+        print("  Downloading full Cook County drive network (this takes a few minutes) …")
         G = ox.graph_from_place(
             "Cook County, Illinois, USA",
-            custom_filter=custom_filter,
+            network_type="drive",
             simplify=True,
             retain_all=False,
         )
         ox.save_graphml(G, cache_path)
+
+    # Keep only the largest STRONGLY connected component. retain_all=False above
+    # gives weakly connected, but with one-way streets some sub-components are
+    # only reachable in one direction — a waypoint that snaps to such a node
+    # makes nx.shortest_path raise NetworkXNoPath and forces the straight-line
+    # fallback (which is what was drawing the 13.5 km cut-through on Route 4).
+    sccs = list(nx.strongly_connected_components(G))
+    if sccs:
+        largest = max(sccs, key=len)
+        if len(largest) < len(G.nodes):
+            print(f"  Trimming graph to largest strongly-connected component "
+                  f"({len(largest):,} of {len(G.nodes):,} nodes) …")
+            G = G.subgraph(largest).copy()
 
     _ROAD_GRAPH_CACHE = G
     return G
