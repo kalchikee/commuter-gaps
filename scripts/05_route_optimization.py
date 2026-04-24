@@ -80,6 +80,74 @@ def estimate_route_cost(length_km: float, n_stops: int,
     }
 
 
+def export_cta_gtfs_routes():
+    """Extract CTA bus and rail route polylines from the local CTA GTFS feed.
+    Builds one representative LineString per route (the longest shape variant)
+    and saves them to:
+        data/processed/cta_rail_routes.geojson
+        data/processed/cta_bus_routes.geojson
+    Idempotent — skips if outputs already exist and GTFS hasn't changed.
+    """
+    rail_out = PROC / "cta_rail_routes.geojson"
+    bus_out  = PROC / "cta_bus_routes.geojson"
+    gtfs_dir = RAW / "gtfs" / "cta"
+    if not gtfs_dir.exists():
+        print("  CTA GTFS not found — skipping existing-route export")
+        return
+    if rail_out.exists() and bus_out.exists():
+        return
+
+    print("  Building CTA bus + rail route polylines from GTFS …")
+    routes = pd.read_csv(gtfs_dir / "routes.txt")
+    trips  = pd.read_csv(gtfs_dir / "trips.txt",
+                          usecols=["route_id", "shape_id"])
+    shapes = pd.read_csv(gtfs_dir / "shapes.txt")
+
+    # For each route, pick the shape with the most points (longest variant)
+    shape_sizes = shapes.groupby("shape_id").size().rename("pts")
+    trips_shape = trips.drop_duplicates(["route_id", "shape_id"]).merge(
+        shape_sizes, on="shape_id", how="left"
+    )
+    rep_shape = (trips_shape.sort_values("pts", ascending=False)
+                            .drop_duplicates("route_id"))
+
+    records = {"rail": [], "bus": []}
+    shapes_sorted = shapes.sort_values(["shape_id", "shape_pt_sequence"])
+    shape_groups = dict(tuple(shapes_sorted.groupby("shape_id")))
+
+    for _, row in rep_shape.iterrows():
+        pts = shape_groups.get(row["shape_id"])
+        if pts is None or len(pts) < 2:
+            continue
+        coords = [(round(lon, 5), round(lat, 5))
+                  for lon, lat in zip(pts["shape_pt_lon"], pts["shape_pt_lat"])]
+        route = routes.loc[routes["route_id"] == row["route_id"]].iloc[0]
+        kind = "rail" if route["route_type"] in (1, 2) else "bus"
+        name = route.get("route_long_name") or route.get("route_short_name") or route["route_id"]
+        color = route.get("route_color")
+        if pd.isna(color) or not isinstance(color, str) or not color.strip():
+            color = "6e7681"   # neutral gray for buses without an official color
+        records[kind].append({
+            "route_id":   str(route["route_id"]),
+            "route_name": str(name),
+            "route_type": "L" if kind == "rail" else "Bus",
+            "color":      "#" + color.strip().upper(),
+            "geometry":   LineString(coords).simplify(0.0001,
+                                                       preserve_topology=True),
+        })
+
+    if records["rail"]:
+        gpd.GeoDataFrame(records["rail"], crs="EPSG:4326").to_file(
+            rail_out, driver="GeoJSON"
+        )
+        print(f"    Saved → {rail_out.name} ({len(records['rail'])} rail routes)")
+    if records["bus"]:
+        gpd.GeoDataFrame(records["bus"], crs="EPSG:4326").to_file(
+            bus_out, driver="GeoJSON"
+        )
+        print(f"    Saved → {bus_out.name} ({len(records['bus'])} bus routes)")
+
+
 # Known overnight employment anchors in Chicago (lon, lat)
 OVERNIGHT_ANCHORS = {
     "Rush University Medical Center": (-87.6713, 41.8738),
@@ -599,6 +667,16 @@ def build_web_map(gdf: gpd.GeoDataFrame,
     anchors_geojson = json.dumps({"type": "FeatureCollection",
                                    "features": anchor_features})
 
+    def _load_gtfs_layer(path: Path) -> str:
+        if not path.exists():
+            return '{"type":"FeatureCollection","features":[]}'
+        layer = gpd.read_file(path)
+        layer["geometry"] = layer.geometry.apply(lambda g: _round_geometry(g, 5))
+        return layer.to_json()
+
+    cta_bus_geojson  = _load_gtfs_layer(PROC / "cta_bus_routes.geojson")
+    cta_rail_geojson = _load_gtfs_layer(PROC / "cta_rail_routes.geojson")
+
     # Split the token into two halves so it doesn't appear as one continuous
     # string in the repo (harmless public token, but matches prior convention).
     token = mapbox_token or (
@@ -917,6 +995,14 @@ def build_web_map(gdf: gpd.GeoDataFrame,
           <input type="checkbox" id="toggle-anchors" checked onchange="toggleLayer('anchors-sym', this)"/>
           <label for="toggle-anchors">Employment Anchors</label>
         </div>
+        <div class="layer-toggle">
+          <input type="checkbox" id="toggle-cta-rail" onchange="toggleCtaLayer('rail', this)"/>
+          <label for="toggle-cta-rail">Existing CTA &quot;L&quot; Rail Lines</label>
+        </div>
+        <div class="layer-toggle">
+          <input type="checkbox" id="toggle-cta-bus" onchange="toggleCtaLayer('bus', this)"/>
+          <label for="toggle-cta-bus">Existing CTA Bus Routes (all)</label>
+        </div>
       </div>
 
       <!-- Legend moved on-map (bottom-left); updates live as you toggle layers -->
@@ -992,6 +1078,8 @@ const BG_DATA      = {bg_geojson};
 const ROUTES_DATA  = {routes_geojson};
 const STOPS_DATA   = {stops_geojson};
 const ANCHORS_DATA = {anchors_geojson};
+const CTA_BUS_DATA  = {cta_bus_geojson};
+const CTA_RAIL_DATA = {cta_rail_geojson};
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtNum(v, fallback) {{
@@ -1131,6 +1219,17 @@ function toggleRouteLayer(cb) {{
   renderLegend();
 }}
 
+function toggleCtaLayer(kind, cb) {{
+  if (!map) return;
+  const ids = kind === "rail"
+    ? ["cta-rail-lines", "cta-rail-hit"]
+    : ["cta-bus-lines",  "cta-bus-hit"];
+  ids.forEach(id => {{
+    if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', cb.checked ? 'visible' : 'none');
+  }});
+  renderLegend();
+}}
+
 // ── Dynamic on-map legend ─────────────────────────────────────────────────────
 // Reflects whichever layers are currently visible — updates each time the
 // user toggles a checkbox in the sidebar.
@@ -1208,6 +1307,22 @@ function renderLegend() {{
     sections.push(legendSection("Employment Anchors",
       legendRow('<span class="lg-star">★</span>',
                 "Major overnight employer (hospital, airport, logistics)")
+    ));
+  }}
+
+  // Existing CTA service
+  if (isLayerVisible("cta-rail-lines")) {{
+    const lLines = [
+      ["#C60C30", "Red Line"],   ["#00A1DE", "Blue Line"],
+      ["#62361B", "Brown Line"], ["#009B3A", "Green Line"],
+      ["#F9461C", "Orange Line"],["#E27EA6", "Pink Line"],
+      ["#522398", "Purple Line"],["#F9E300", "Yellow Line"],
+    ].map(([c, l]) => legendRow(lineSwatch(c), l)).join("");
+    sections.push(legendSection("CTA \"L\" Rail (existing)", lLines));
+  }}
+  if (isLayerVisible("cta-bus-lines")) {{
+    sections.push(legendSection("CTA Buses (existing)",
+      legendRow(lineSwatch("#6e7681"), "All CTA bus routes")
     ));
   }}
 
@@ -1311,6 +1426,20 @@ function stopTooltipHtml(p) {{
           ${{tooltipRow("Stop sequence", fmtNum(p.stop_seq))}}`;
 }}
 
+function ctaTooltipHtml(p) {{
+  const color = p.color || "#6e7681";
+  return `<div class="tt-head">
+            <span style="display:inline-block;width:10px;height:10px;background:${{color}};
+                         border-radius:2px;margin-right:6px;vertical-align:middle"></span>
+            ${{p.route_name || p.route_id || "CTA route"}}
+          </div>
+          ${{tooltipRow("Type", p.route_type || "—")}}
+          ${{tooltipRow("Route ID", p.route_id || "—")}}
+          <div style="margin-top:4px;color:#8b949e;font-size:11px">
+            Existing CTA service — shown for context.
+          </div>`;
+}}
+
 function initMap() {{
   mapboxgl.accessToken = MAPBOX_TOKEN;
 
@@ -1395,6 +1524,56 @@ function initMap() {{
       type: "line",
       source: "block-groups",
       paint: {{ "line-color": "#333333", "line-width": 0.3 }}
+    }});
+
+    // ── Existing CTA service (bus + L) ─────────────────────────────────────
+    map.addSource("cta-bus",  {{ type: "geojson", data: CTA_BUS_DATA }});
+    map.addSource("cta-rail", {{ type: "geojson", data: CTA_RAIL_DATA }});
+
+    map.addLayer({{
+      id: "cta-bus-lines",
+      type: "line",
+      source: "cta-bus",
+      layout: {{ visibility: "none" }},
+      paint: {{
+        "line-color": "#6e7681",
+        "line-width": 1.2,
+        "line-opacity": 0.65,
+      }}
+    }});
+    map.addLayer({{
+      id: "cta-bus-hit",
+      type: "line",
+      source: "cta-bus",
+      layout: {{ visibility: "none" }},
+      paint: {{
+        "line-color": "#6e7681",
+        "line-width": 10,
+        "line-opacity": 0.001,
+      }}
+    }});
+
+    map.addLayer({{
+      id: "cta-rail-lines",
+      type: "line",
+      source: "cta-rail",
+      layout: {{ visibility: "none" }},
+      paint: {{
+        "line-color": ["get", "color"],
+        "line-width": 3,
+        "line-opacity": 0.9,
+      }}
+    }});
+    map.addLayer({{
+      id: "cta-rail-hit",
+      type: "line",
+      source: "cta-rail",
+      layout: {{ visibility: "none" }},
+      paint: {{
+        "line-color": ["get", "color"],
+        "line-width": 12,
+        "line-opacity": 0.001,
+      }}
     }});
 
     // ── Proposed routes ────────────────────────────────────────────────────
@@ -1542,6 +1721,22 @@ function initMap() {{
       hideTooltip();
     }});
 
+    ["cta-rail-hit", "cta-bus-hit"].forEach(lid => {{
+      map.on("mousemove", lid, (e) => {{
+        if (!e.features.length) return;
+        map.getCanvas().style.cursor = "pointer";
+        showTooltip(ctaTooltipHtml(e.features[0].properties), e);
+      }});
+      map.on("mouseleave", lid, () => {{
+        map.getCanvas().style.cursor = "";
+        hideTooltip();
+      }});
+      map.on("click", lid, (e) => {{
+        document.getElementById("info-panel").innerHTML =
+          ctaTooltipHtml(e.features[0].properties);
+      }});
+    }});
+
   }});
 }}
 
@@ -1611,6 +1806,10 @@ def run_route_optimization():
         print(f"\nSaved → proposed_routes.geojson, proposed_stops.geojson")
 
     make_route_map(gdf, routes_gdf, stops_gdf, OVERNIGHT_ANCHORS)
+
+    print("Exporting existing CTA routes …")
+    export_cta_gtfs_routes()
+
     build_web_map(gdf, routes_gdf, stops_gdf, OVERNIGHT_ANCHORS)
 
     print("\nPhase 4 complete.")
