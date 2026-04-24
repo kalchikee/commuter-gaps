@@ -630,7 +630,7 @@ function renderLegend() {
       ["#F9461C", "Orange Line"],["#E27EA6", "Pink Line"],
       ["#522398", "Purple Line"],["#F9E300", "Yellow Line"],
     ].map(([c, l]) => legendRow(lineSwatch(c), l)).join("");
-    sections.push(legendSection("CTA "L" Rail (existing)", lLines));
+    sections.push(legendSection('CTA "L" Rail (existing)', lLines));
   }
   if (isLayerVisible("cta-bus-lines")) {
     sections.push(legendSection("CTA Buses (existing)",
